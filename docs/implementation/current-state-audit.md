@@ -17,7 +17,7 @@
 
 ### Public Web Hosting Status
 - `https://cable.wael.bot`: `HTTP/2 200` (Cloudflare edge).
-- `https://wazir.wael.bot`: `HTTP/2 502` (Cloudflare DNS/edge active, origin not serving).
+- `https://wazir.wael.bot`: `HTTP/2 200` (Live on Cloudflare Pages `wazir-portal` with custom domain bound).
 
 ---
 

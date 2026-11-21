@@ -25,7 +25,16 @@ with sync_playwright() as p:
             assert page.locator("h1").is_visible(), f"H1 not visible on {path}"
 
             if name == "home" and label == "desktop":
-                assert page.locator("#first-run .card").count() == 8, "Expected 8 first-run steps"
+                assert page.locator("#comp-grid .comp-btn").count() == 9, "Expected 9 interactive components"
+                page.click("#comp-grid .comp-btn:nth-child(4)")
+                assert "Model Router" in page.locator("#comp-detail").inner_text()
+                assert page.locator("#topo-svg").is_visible(), "Fleet topology SVG must be visible"
+                page.fill("#demo-search", "linux")
+                assert "Linux" in (page.locator("#topo-svg").text_content() or "")
+                page.fill("#demo-search", "")
+                assert page.locator("#onboarding-steps .comp-btn").count() == 8, "Expected 8 onboarding steps"
+                page.click("#onboarding-steps .comp-btn:nth-child(6)")
+                assert "Natural-Language Task" in page.locator("#onboarding-detail").inner_text()
                 assert page.locator("#credits-notices").is_visible(), "Credits & notices must be visible"
 
             if name == "download" and label == "desktop":

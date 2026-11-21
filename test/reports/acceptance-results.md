@@ -15,3 +15,4 @@
 | CLI Smoke (`wa about`, `wa shell -c`) | `node apps/cli/dist/index.js about && node apps/cli/dist/index.js shell -c "echo WAZIR_SHELL_OK"` | **PASS** (`WAZIR_SHELL_OK`) |
 | Android / GrapheneOS Build | `cd apps/android && ./gradlew testDebugUnitTest assembleDebug` | **PASS** (`app-debug.apk` built) |
 | Release Manifest & Checksums | `node scripts/generate-release-manifest.mjs` | **PASS** (`SHA256SUMS.txt`, `sbom.cdx.json`, `release-manifest.json`) |
+| Live Public Portal QA (`wazir.wael.bot`) | `WAZIR_PORTAL_URL=https://wazir.wael.bot python3 test/portal-browser-qa.py` | **PASS** (`HTTP/2 200`, 0 console errors, 4 viewports, 9-component explorer, fleet topology, 8-step onboarding, 6 downloadable artifacts) |

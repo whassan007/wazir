@@ -1,6 +1,6 @@
 issue_id,severity,component,description,status,blocker_type
-ISS-001,P0,wazir.wael.bot,Custom domain wazir.wael.bot currently returns 502 from Cloudflare; needs DNS/Pages custom domain binding to wazir-portal.pages.dev,open,External DNS/Cloudflare zone route
+ISS-001,P0,wazir.wael.bot,Custom domain wazir.wael.bot bound to wazir-portal.pages.dev and verified serving HTTP/2 200 over TLS,resolved,None
 ISS-002,P1,packaging-macos,Apple Developer ID code signing and notarization credentials not configured on build host (unsigned dev .app/.tar.gz produced),reviewed,External signing credentials
-ISS-003,P1,packaging-linux,Real .deb package built on DGX Spark Ubuntu 24.04 (dist/wazir_0.3.2_all.deb); rpmbuild not installed on macOS host (RPM spec/tarball produced),partially_resolved,RPM build host tool
+ISS-003,P1,packaging-linux,Real .deb package built on DGX Spark Ubuntu 24.04 (dist/wazir_0.3.2_all.deb); rpmbuild not installed on macOS/Ubuntu hosts (RPM spec/tarball produced),partially_resolved,RPM build host tool
 ISS-004,P1,mcp-server,Fixed stdout pollution in apps/cli/src/wazirMcpServer.ts by redirecting process.stdout.write to stderr during stdio MCP server execution,resolved,None
 ISS-005,P2,fleet-hosts,mac_studio (100.76.30.71) and rtx_win (100.84.209.95) unreachable during session,open,Hardware offline

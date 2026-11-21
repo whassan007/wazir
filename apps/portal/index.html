@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Wazir — Your AI operating layer</title>
-  <meta name="description" content="One shell for commands and AI. One control center for every machine." />
+  <title>Wazir AI OS — One intelligent shell. Every machine. Verified execution.</title>
+  <meta name="description" content="One intelligent shell. Every machine. Verified execution. Execute traditional OS commands in a real PTY, delegate work to local Qwen models across your fleet, and verify results." />
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="/styles/design-system.css" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -18,13 +18,15 @@
     <div class="nav-inner">
       <a class="brand" href="/">
         <img src="/logo-emblem.svg" alt="" width="24" height="24" />
-        <span>Wazir</span>
+        <span>Wazir AI OS</span>
       </a>
       <nav class="nav-links" aria-label="Primary">
-        <a href="#explore">Explore</a>
-        <a href="#first-run">First Run</a>
+        <a href="#explore">Overview</a>
+        <a href="#architecture">Architecture</a>
+        <a href="#fleet-demo">Fleet Demo</a>
+        <a href="#first-run">Onboarding</a>
         <a href="#docs">Docs</a>
-        <a href="#privacy">Privacy</a>
+        <a href="#privacy">Diagnostics</a>
         <a href="#licensing">Licensing</a>
         <button id="theme-toggle" class="btn sm" type="button" aria-label="Toggle color theme">Theme</button>
         <a class="btn primary sm" href="/download">Download Wazir</a>
@@ -34,12 +36,14 @@
 
   <main id="main">
     <section class="hero" aria-labelledby="home-hero-title">
-      <h1 id="home-hero-title">Wazir. Your AI operating layer.</h1>
-      <p class="lead">One shell for commands and AI. One control center for every machine.</p>
-      <p class="sub">Execute traditional OS commands in a real PTY, delegate complex tasks to local Qwen models across your fleet, and verify every result with real evidence.</p>
+      <div class="pill" style="margin-bottom:14px;">Wazir AI OS v0.3.2 · Local-First · Verified Execution</div>
+      <h1 id="home-hero-title">Wazir AI OS</h1>
+      <p class="lead">One intelligent shell. Every machine. Verified execution.</p>
+      <p class="sub">Execute traditional operating-system commands in a persistent native PTY, delegate complex engineering tasks to local Qwen models across your machines, and verify every result with observed evidence.</p>
       <div class="hero-actions-row">
         <a class="btn primary" href="/download">Download Wazir</a>
-        <a class="btn" href="#explore">Explore Wazir</a>
+        <a class="btn" href="#architecture">Component Explorer</a>
+        <a class="btn" href="#fleet-demo">Interactive Fleet Demo</a>
         <a class="btn" href="https://github.com/whassan007/wazir" target="_blank" rel="noopener">View source</a>
       </div>
     </section>
@@ -76,51 +80,112 @@ wa:Wazir$ find the startup bottleneck in Wazir
       </div>
     </section>
 
+    <!-- Section 8.3: Interactive Component Explorer -->
+    <section id="architecture" class="container tight">
+      <h2 class="section-heading">Interactive Component Explorer</h2>
+      <p class="section-sub">Click any of the 9 connected Wazir AI OS subsystems to inspect its purpose, capabilities, dependencies, source location, configuration, and operational status.</p>
+      <div class="grid-2">
+        <div>
+          <div class="comp-grid" id="comp-grid" role="tablist" aria-label="Wazir system components"></div>
+          <div class="terminal-box" style="margin-top:16px;padding:16px;">
+            <div class="mono" style="font-size:11px;color:var(--terminal-muted);margin-bottom:8px;">Animated Task &amp; Verification Data Flow</div>
+            <svg viewBox="0 0 600 100" width="100%" aria-label="Animated Wazir execution data flow">
+              <rect x="8" y="25" width="104" height="46" rx="8" fill="#191b20" stroke="#60a5fa"/>
+              <text x="60" y="52" fill="#f4f3ef" font-size="11" text-anchor="middle">Wazir Shell</text>
+              <line x1="112" y1="48" x2="152" y2="48" stroke="#60a5fa" stroke-width="2" stroke-dasharray="4 4"/>
+              <rect x="152" y="25" width="104" height="46" rx="8" fill="#191b20" stroke="#60a5fa"/>
+              <text x="204" y="52" fill="#f4f3ef" font-size="11" text-anchor="middle">Wazir Core</text>
+              <line x1="256" y1="48" x2="296" y2="48" stroke="#4ade80" stroke-width="2" stroke-dasharray="4 4"/>
+              <rect x="296" y="25" width="114" height="46" rx="8" fill="#191b20" stroke="#4ade80"/>
+              <text x="353" y="52" fill="#f4f3ef" font-size="11" text-anchor="middle">Router &amp; Worker</text>
+              <line x1="410" y1="48" x2="450" y2="48" stroke="#4ade80" stroke-width="2" stroke-dasharray="4 4"/>
+              <rect x="450" y="25" width="142" height="46" rx="8" fill="#191b20" stroke="#4ade80"/>
+              <text x="521" y="52" fill="#f4f3ef" font-size="11" text-anchor="middle">Verification Engine</text>
+              <circle class="flow-dot" cx="132" cy="48" r="4" fill="#60a5fa"/>
+              <circle class="flow-dot" cx="276" cy="48" r="4" fill="#4ade80"/>
+              <circle class="flow-dot" cx="430" cy="48" r="4" fill="#4ade80"/>
+            </svg>
+          </div>
+        </div>
+        <div class="card elevated" id="comp-detail" aria-live="polite"></div>
+      </div>
+    </section>
+
+    <!-- Section 8.4: Interactive Fleet Topology Visualization -->
+    <section id="fleet-demo" class="container tight">
+      <div style="display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:12px;margin-bottom:18px;">
+        <div>
+          <h2 class="section-heading" style="margin-bottom:6px;">Interactive Fleet Topology</h2>
+          <span class="pill">Public Demo Mode — Sanitized Sample Topology (Real worker inventories require operator authentication)</span>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <button class="btn sm" id="demo-play-btn" type="button">▶ Playback Timeline</button>
+          <button class="btn sm" id="demo-zoom-in" type="button" aria-label="Zoom in">+</button>
+          <button class="btn sm" id="demo-zoom-out" type="button" aria-label="Zoom out">−</button>
+        </div>
+      </div>
+
+      <div class="grid-2" style="margin-bottom:16px;">
+        <input id="demo-search" class="btn sm" style="border-radius:8px;text-align:left;width:100%;" placeholder="Search sample machines or models (e.g. qwen3-coder, linux, mac)..." aria-label="Search sample fleet" />
+        <select id="demo-os-filter" class="btn sm" style="border-radius:8px;width:100%;" aria-label="Filter by operating system">
+          <option value="all">All OS Families (Online / Standby Legend)</option>
+          <option value="darwin">macOS (darwin / arm64)</option>
+          <option value="linux">Linux (Ubuntu GPU / arm64)</option>
+          <option value="win32">Windows (RTX / x64)</option>
+          <option value="android">GrapheneOS / Android (arm64)</option>
+        </select>
+      </div>
+
+      <div class="topo-wrap">
+        <svg id="topo-svg" viewBox="0 0 900 280" width="100%" height="280" aria-label="Sanitized sample fleet topology graph"></svg>
+      </div>
+      <div id="demo-inspector" class="card elevated" style="margin-top:16px;" aria-live="polite"></div>
+    </section>
+
+    <!-- Section 8.6: Interactive 8-Step Onboarding -->
     <section id="first-run" class="container tight">
-      <h2 class="section-heading">Your first five minutes</h2>
-      <p class="section-sub">From installation to your first verified distributed task—while keeping your ordinary shell 100% functional offline.</p>
-      <div class="grid-4">
-        <div class="card"><strong>1. Launch Wazir Shell</strong><p class="muted" style="font-size:14px;margin:8px 0 0;">Open Wazir Shell from the macOS Dock, Linux launcher, or run <code>wa shell</code>.</p></div>
-        <div class="card"><strong>2. Review Disclosures</strong><p class="muted" style="font-size:14px;margin:8px 0 0;">Accept or decline minimal diagnostics. Declining never blocks your native shell.</p></div>
-        <div class="card"><strong>3. Discover Local Model</strong><p class="muted" style="font-size:14px;margin:8px 0 0;">Run <code>wa doctor</code> to discover local Ollama, MLX, or LM Studio endpoints.</p></div>
-        <div class="card"><strong>4. Test a Native Command</strong><p class="muted" style="font-size:14px;margin:8px 0 0;">Run <code>git status -s</code> or <code>!ls -la</code> directly in your persistent PTY.</p></div>
-        <div class="card"><strong>5. Run an AI Task</strong><p class="muted" style="font-size:14px;margin:8px 0 0;">Type <code>?explain the failing test and run vitest</code> to route to local Qwen.</p></div>
-        <div class="card"><strong>6. Open Mission Control</strong><p class="muted" style="font-size:14px;margin:8px 0 0;">Launch <code>Wazir Mission Control</code> or run <code>wa fleet</code> to monitor jobs.</p></div>
-        <div class="card"><strong>7. Inspect Verified Result</strong><p class="muted" style="font-size:14px;margin:8px 0 0;">Inspect the 10-state execution graph and real test/build verification receipt.</p></div>
-        <div class="card"><strong>8. Pair Another Machine</strong><p class="muted" style="font-size:14px;margin:8px 0 0;">Register authorized macOS/Linux workers or pair GrapheneOS over scoped URI.</p></div>
-      </div>
+      <h2 class="section-heading">Interactive 8-Step Onboarding</h2>
+      <p class="section-sub">Click any step below to walk through installing Wazir Shell, configuring local Qwen inference, and verifying a distributed task.</p>
+      <div class="grid-4" id="onboarding-steps"></div>
+      <div class="card elevated" id="onboarding-detail" style="margin-top:18px;" aria-live="polite"></div>
     </section>
 
+    <!-- Section 8.7: Documentation -->
     <section id="docs" class="container tight">
-      <h2 class="section-heading">Documentation &amp; architecture</h2>
-      <p class="section-sub">Everything needed to operate Wazir across macOS, Linux, and GrapheneOS.</p>
+      <h2 class="section-heading">Documentation &amp; references</h2>
+      <p class="section-sub">Complete operational reference for macOS, Linux, distributed workers, and GrapheneOS.</p>
       <div class="grid-3">
-        <div class="card"><h3>Quickstart &amp; CLI</h3><p class="muted" style="font-size:14px;">Commands: <code>wa shell</code>, <code>wa exec</code>, <code>wa fleet</code>, <code>wa doctor</code>, <code>wa about</code>, <code>wa license</code>.</p></div>
-        <div class="card"><h3>Distributed Workers</h3><p class="muted" style="font-size:14px;">Register workers with <code>WAZIR_REGISTRATION_TOKEN</code> over SSE with lease-fenced claims.</p></div>
-        <div class="card"><h3>Security &amp; Sandboxing</h3><p class="muted" style="font-size:14px;">Workspace realpath containment, PolicyEngine gating, and private-fleet authentication.</p></div>
+        <div class="card"><h3>Quickstart &amp; CLI Reference</h3><p class="muted" style="font-size:14px;">Commands: <code>wa shell</code>, <code>wa exec</code>, <code>wa chat</code>, <code>wa fleet</code>, <code>wa doctor</code>, <code>wa diagnostics</code>, <code>wa about</code>, <code>wa license</code>.</p></div>
+        <div class="card"><h3>Configuration &amp; Providers</h3><p class="muted" style="font-size:14px;">Configure <code>~/.wazir/config.json</code> for local Ollama (<code>:11434</code>), MLX (<code>:8080</code>), LM Studio (<code>:1234</code>), and fleet hosts.</p></div>
+        <div class="card"><h3>Distributed Worker Registration</h3><p class="muted" style="font-size:14px;">Register workers with <code>WAZIR_REGISTRATION_TOKEN</code> over SSE with lease-fenced execution claims.</p></div>
+        <div class="card"><h3>Security Model &amp; Sandboxing</h3><p class="muted" style="font-size:14px;">Workspace realpath containment, PolicyEngine gating, short-lived credentials, and private-fleet authentication.</p></div>
+        <div class="card"><h3>GrapheneOS &amp; Termux Guide</h3><p class="muted" style="font-size:14px;">Unprivileged user-space Android companion (<code>ai.wazir.mobile</code>) and ARM64 Termux CLI without root access.</p></div>
+        <div class="card"><h3>Troubleshooting &amp; Releases</h3><p class="muted" style="font-size:14px;">Run <code>wa doctor --detail</code> to inspect health, or visit <a href="/download#release-history">Release History &amp; Checksums</a>.</p></div>
       </div>
     </section>
 
+    <!-- Section 10: Privacy & Diagnostics -->
     <section id="privacy" class="container tight">
       <h2 class="section-heading">Privacy &amp; diagnostics</h2>
       <div class="card">
-        <p style="margin-top:0;"><strong>Zero telemetry before acceptance.</strong> Declining diagnostic reporting disables event collection completely and never blocks your native shell.</p>
-        <p class="muted" style="margin-bottom:0;">When enabled, only allowlisted metadata (app version, OS/arch, error code, component ID, random installation ID) is collected. Raw shell histories, prompts, source files, API keys, tokens, and private paths are stripped and never collected by default.</p>
+        <p style="margin-top:0;"><strong>Zero telemetry before affirmative acceptance.</strong> Declining diagnostic reporting disables event collection completely and never blocks your native OS shell.</p>
+        <p class="muted" style="margin-bottom:0;">When enabled, only allowlisted metadata (app version, OS/arch, error code, failure category, component ID, random installation ID, consent version) is collected. Raw shell histories, prompts, source files, API keys, tokens, and private paths are stripped by <code>redactDiagnosticPayload()</code> and never collected by default.</p>
       </div>
     </section>
 
+    <!-- Section 9: Licensing & Commercial Authorization -->
     <section id="licensing" class="container tight">
       <h2 class="section-heading">Licensing &amp; commercial authorization</h2>
       <div class="grid-2">
         <div class="card">
           <h3>Licensing boundaries</h3>
-          <p class="muted"><strong>Existing Core, CLI, API, Desktop &amp; Mobile:</strong> Licensed under <code>AGPL-3.0-only</code>.</p>
+          <p class="muted"><strong>Existing Core, CLI, API, Desktop &amp; Mobile:</strong> Licensed under <code>AGPL-3.0-only</code>. Prior AGPL rights remain intact.</p>
           <p class="muted"><strong>Qwen Code Transplant:</strong> Selective Apache-2.0 components from <code>QwenLM/qwen-code</code>.</p>
-          <p class="muted" style="margin-bottom:0;"><strong>New Standalone Modules:</strong> Proposed under a source-available, noncommercial license (PolyForm Noncommercial 1.0.0 candidate, pending legal review) paired with commercial authorization.</p>
+          <p class="muted" style="margin-bottom:0;"><strong>New Standalone Modules:</strong> Proposed under a source-available, noncommercial license (PolyForm Noncommercial 1.0.0 candidate, pending legal review) paired with commercial authorization. Not claimed as OSI-approved open source.</p>
         </div>
         <div class="card">
           <h3>Commercial inquiry</h3>
-          <p class="muted" style="font-size:14px;">Submitting an inquiry does not automatically grant a commercial license.</p>
+          <p class="muted" style="font-size:14px;">Submitting an inquiry records a request for rights-holder review and does not automatically grant a commercial license.</p>
           <form id="license-form" style="display:grid;gap:10px;">
             <input id="lic-org" class="btn sm" style="border-radius:8px;text-align:left;" placeholder="Organization name" required />
             <input id="lic-email" class="btn sm" style="border-radius:8px;text-align:left;" type="email" placeholder="Contact email" required />
@@ -134,7 +199,7 @@ wa:Wazir$ find the startup bottleneck in Wazir
       <div id="credits-notices" class="card" style="margin-top:20px;">
         <h3>Credits &amp; third-party notices</h3>
         <p class="muted" style="margin-bottom:8px;"><strong>Primary Authorship &amp; Copyright:</strong> Copyright © 2026 Wael Hassan (<code>whassan007</code>). See <code>AUTHORS</code>, <code>CONTRIBUTORS</code>, and <code>NOTICE</code> in the source repository.</p>
-        <p class="muted" style="margin-bottom:0;"><strong>Third-Party Attributions:</strong> Includes selective Apache-2.0 components adapted from <code>QwenLM/qwen-code</code> (Alibaba Group / QwenLM), alongside Tauri, Node.js, and xterm/PTY runtime dependencies documented in <code>THIRD_PARTY_LICENSES.md</code>.</p>
+        <p class="muted" style="margin-bottom:0;"><strong>Third-Party Attributions:</strong> Includes selective Apache-2.0 components adapted from <code>QwenLM/qwen-code</code> (Alibaba Group / QwenLM), alongside Tauri, Node.js, and portable-pty runtime dependencies documented in <code>THIRD_PARTY_LICENSES.md</code>.</p>
       </div>
     </section>
   </main>
@@ -155,7 +220,7 @@ wa:Wazir$ find the startup bottleneck in Wazir
           <li><a href="/download#get-started">Wazir Shell</a></li>
           <li><a href="/download#get-started">Mission Control</a></li>
           <li><a href="/download#get-started">Mobile</a></li>
-          <li><a href="/download#work-across-machines">Workers</a></li>
+          <li><a href="#fleet-demo">Workers</a></li>
         </ul>
       </div>
       <div class="footer-col">
@@ -163,6 +228,7 @@ wa:Wazir$ find the startup bottleneck in Wazir
         <ul>
           <li><a href="/download#terminal-install">CLI</a></li>
           <li><a href="#docs">Documentation</a></li>
+          <li><a href="#architecture">Architecture</a></li>
           <li><a href="https://github.com/whassan007/wazir" target="_blank" rel="noopener">Source code</a></li>
           <li><a href="/release-manifest.json">Releases</a></li>
         </ul>
@@ -172,7 +238,7 @@ wa:Wazir$ find the startup bottleneck in Wazir
         <ul>
           <li><a href="/download">Installation</a></li>
           <li><a href="#first-run">Getting started</a></li>
-          <li><a href="#docs">Troubleshooting</a></li>
+          <li><a href="/download#release-history">Troubleshooting</a></li>
           <li><a href="https://github.com/whassan007/wazir/issues" target="_blank" rel="noopener">Report a bug</a></li>
         </ul>
       </div>
@@ -199,6 +265,152 @@ wa:Wazir$ find the startup bottleneck in Wazir
       root.setAttribute('data-theme', next);
       localStorage.setItem('wazir_theme', next);
     };
+
+    // 9 Interactive Components (Section 8.3)
+    const COMPONENTS = [
+      { id:'shell', name:'Wazir Shell', status:'Operational · v0.3.2', purpose:'Universal AI-native terminal combining native PTY shell execution with governed AI tasks.', caps:'Persistent cwd/env, pipes, Ctrl+C, ! / ? / auto routing, offline fallback', deps:'Tauri 2, portable-pty, @wazir/core', src:'apps/shell/, apps/cli/src/commands/shellCommand.ts', install:'Download Wazir Shell.app or run wa shell', cfg:'wa shell / Wazir Shell.app', interacts:'Sends AI requests to Wazir Core; deep-links active jobs into Mission Control.' },
+      { id:'mc', name:'Mission Control', status:'Operational · v0.3.2', purpose:'Graphical machine and agent orchestration operations console.', caps:'Interactive machine drill-down, 10-state execution graph, approvals inbox, execution replay', deps:'Tauri 2, @wazir/web, @wazir/api', src:'apps/desktop/, apps/web/public/mission-control.html', install:'Download Wazir Mission Control.app', cfg:'npm run desktop:dev / :4801/mission-control.html', interacts:'Streams real-time SSE job state from Wazir Core and worker telemetry from Fleet Registry.' },
+      { id:'core', name:'Wazir Core', status:'Operational · v0.3.2', purpose:'Task planning, policy enforcement, persistence, checkpoints, and verification orchestration.', caps:'JobOrchestrator, durable checkpoints, lease fencing, PolicyEngine, ExecutionRecovery', deps:'Node.js >= 22.13, SQLite / Postgres', src:'packages/core/src/services/, packages/policies/', install:'Included in @wazir/core & wa bundle', cfg:'~/.wazir/config.json', interacts:'Coordinates Planner, Model Router, Worker dispatch, and Verification Engine.' },
+      { id:'router', name:'Model Router', status:'Operational · 90%+ Local Target', purpose:'Capability-aware model selection across local MLX, Ollama, LM Studio, and authorized providers.', caps:'Local-first Qwen preference, hardware capability matching, backpressure & fallback', deps:'@wazir/models, @wazir/scheduler', src:'packages/models/, packages/core/src/services/scheduler.ts', install:'Included in Wazir Core', cfg:'fleetHosts & model preferences in ~/.wazir/config.json', interacts:'Selects optimal local or remote model endpoint for Agent Runtime.' },
+      { id:'agent', name:'Agent Runtime', status:'Operational · Qwen Core + ACP', purpose:'Unified ReAct coding and execution agent with smart edit and context compression.', caps:'Parallel read-only tool scheduling, loop detection, proportional verification, ACP/MCP bridge', deps:'@wazir/agents, @wazir/tools', src:'packages/agents/src/qwenCore/, packages/agents/src/acp/', install:'Bundled in bin/wa.js', cfg:'wa exec "<task>"', interacts:'Executes sandboxed tools on assigned Worker Machines and reports evidence to Verification Engine.' },
+      { id:'worker', name:'Worker Machines', status:'Operational · Multi-Host SSE', purpose:'Distributed execution services on local and remote macOS, Linux/DGX Spark, and Windows hosts.', caps:'SSE task streaming, heartbeats, hardware/model discovery, lease-fenced job claims', deps:'@wazir/workers, @wazir/worker', src:'apps/worker/src/, apps/api/src/', install:'wa workers start or systemd/launchd service', cfg:'WAZIR_REGISTRATION_TOKEN & API URL', interacts:'Claims lease-fenced tasks from Wazir Core and streams execution events back to Mission Control.' },
+      { id:'mobile', name:'GrapheneOS Mobile', status:'Operational · Zero-Root APK + Termux', purpose:'GrapheneOS-compatible Android companion application and Termux ARM64 CLI integration.', caps:'Task input, fleet view, live execution progress, approval requests, QR/URI host pairing', deps:'Android SDK 35, Jetpack Compose, Termux nodejs-lts', src:'apps/android/, scripts/install-termux.sh', install:'Install wazir-mobile-0.3.2-android-debug.apk or run install-termux.sh', cfg:'Scoped device pairing URI / QR token', interacts:'Connects to authorized Wazir API over TLS/SSE for remote monitoring and approvals.' },
+      { id:'diag', name:'Diagnostic Pipeline', status:'Operational · Consent-Gated', purpose:'Consent-managed error collection, redaction, crash fingerprinting, and local Qwen issue triage.', caps:'First-launch disclosure gate, allowlist + regex redaction, bounded offline queue, deduplication', deps:'@wazir/observability', src:'packages/observability/src/, apps/api/src/diagnosticsRoutes.ts', install:'Built into CLI, Shell, and API server', cfg:'wa diagnostics status | accept | decline | purge', interacts:'Ingests sanitized client errors and uses local Qwen models to classify reproduction candidates.' },
+      { id:'verify', name:'Verification Engine', status:'Operational · Evidence-Gated', purpose:'Independent verification engine ensuring tasks never complete on model self-reporting alone.', caps:'Test/build execution oracles, file-diff verification, formal assurance adapters', deps:'@wazir/assurance, @wazir/core', src:'packages/core/src/services/verificationEngine.ts', install:'Built into Wazir Core execution pipeline', cfg:'Automatic on every governed AI task', interacts:'Validates Worker tool outputs before transitioning job state to Completed and verified.' },
+    ];
+
+    let activeComp = COMPONENTS[0];
+    function renderComponents() {
+      const grid = document.getElementById('comp-grid');
+      grid.innerHTML = COMPONENTS.map(c => `
+        <button class="comp-btn ${c.id===activeComp.id?'active':''}" type="button" role="tab" aria-selected="${c.id===activeComp.id}" onclick="selectComp('${c.id}')">
+          <strong>${c.name}</strong>
+          <div class="muted" style="font-size:11px;margin-top:3px;">${c.src.split(',')[0]}</div>
+        </button>
+      `).join('');
+      document.getElementById('comp-detail').innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
+          <h3 style="margin:0;">${activeComp.name}</h3>
+          <span class="pill">${activeComp.status}</span>
+        </div>
+        <p style="margin-top:0;">${activeComp.purpose}</p>
+        <div style="display:grid;gap:8px;font-size:13.5px;">
+          <div><strong>Capabilities:</strong> <span class="muted">${activeComp.caps}</span></div>
+          <div><strong>Dependencies:</strong> <code class="mono">${activeComp.deps}</code></div>
+          <div><strong>Source Location:</strong> <code class="mono">${activeComp.src}</code></div>
+          <div><strong>Installation:</strong> <span class="muted">${activeComp.install}</span></div>
+          <div><strong>Configuration:</strong> <code class="mono">${activeComp.cfg}</code></div>
+          <div><strong>Interactions:</strong> <span class="muted">${activeComp.interacts}</span></div>
+        </div>
+      `;
+    }
+    window.selectComp = (id) => { activeComp = COMPONENTS.find(c=>c.id===id) || COMPONENTS[0]; renderComponents(); };
+    renderComponents();
+
+    // Interactive Fleet Topology (Section 8.4)
+    const DEMO_MACHINES = [
+      { id:'demo-mac', name:'Sample Apple Silicon Mac', os:'darwin', arch:'arm64', x:155, y:140, status:'online', models:['qwen3.5-9b-local','qwen3-30b-a3b'], cpu:28, mem:54, role:'Shell & Planner Host' },
+      { id:'demo-linux', name:'Sample Linux GPU Node', os:'linux', arch:'arm64', x:455, y:78, status:'online', models:['qwen3-coder:30b','qwen3.6:35b-a3b','gemma4:26b'], cpu:34, mem:46, role:'Primary Qwen Inference & Build Worker' },
+      { id:'demo-win', name:'Sample Windows RTX Node', os:'win32', arch:'x64', x:455, y:205, status:'standby', models:['qwen2.5-coder:14b'], cpu:12, mem:39, role:'Shared GPU Standby Worker' },
+      { id:'demo-phone', name:'Sample GrapheneOS Client', os:'android', arch:'arm64', x:755, y:140, status:'online', models:[], cpu:8, mem:31, role:'Mobile Companion & Approval Client' },
+    ];
+    let demoZoom = 1;
+    let selectedMachine = DEMO_MACHINES[1];
+    let playbackStage = 'Completed and verified (41/41 tests pass)';
+
+    function renderTopology() {
+      const q = (document.getElementById('demo-search').value || '').toLowerCase();
+      const osF = document.getElementById('demo-os-filter').value;
+      const visible = DEMO_MACHINES.filter(m => (osF==='all'||m.os===osF) && (!q || JSON.stringify(m).toLowerCase().includes(q)));
+      const svg = document.getElementById('topo-svg');
+      svg.style.transform = `scale(${demoZoom})`;
+      svg.style.transformOrigin = 'center center';
+      const edges = [
+        [155,140,455,78,'Lease-Fenced Dispatch'],
+        [155,140,455,205,'Standby Route'],
+        [455,78,755,140,'Verified SSE Stream'],
+      ];
+      svg.innerHTML = edges.map(e => `
+        <line x1="${e[0]}" y1="${e[1]}" x2="${e[2]}" y2="${e[3]}" stroke="#334155" stroke-width="2" stroke-dasharray="5 5"/>
+      `).join('') + visible.map(m => `
+        <g style="cursor:pointer" onclick="selectDemoMachine('${m.id}')">
+          <rect x="${m.x-105}" y="${m.y-36}" width="210" height="72" rx="12" fill="#191b20" stroke="${m.id===selectedMachine.id?'#60a5fa':'#334155'}" stroke-width="${m.id===selectedMachine.id?'2.5':'1.5'}"/>
+          <text x="${m.x}" y="${m.y-10}" fill="#f4f3ef" font-size="12" font-weight="600" text-anchor="middle">${m.name}</text>
+          <text x="${m.x}" y="${m.y+8}" fill="#9a9890" font-size="10.5" text-anchor="middle">${m.os}/${m.arch} · ${m.status} · CPU ${m.cpu}%</text>
+          <text x="${m.x}" y="${m.y+24}" fill="#60a5fa" font-size="10.5" text-anchor="middle">${m.models.length ? m.models.slice(0,2).join(', ') : 'Companion Client'}</text>
+        </g>
+      `).join('');
+
+      document.getElementById('demo-inspector').innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+          <div>
+            <strong>${selectedMachine.name}</strong>
+            <span class="muted" style="font-size:13px;margin-left:8px;">(${selectedMachine.role})</span>
+          </div>
+          <span class="pill">${selectedMachine.status.toUpperCase()} · Synthetic Demo Node</span>
+        </div>
+        <p class="muted" style="margin:8px 0;font-size:14px;">OS / Arch: <code>${selectedMachine.os}/${selectedMachine.arch}</code> · CPU: <strong>${selectedMachine.cpu}%</strong> · Memory: <strong>${selectedMachine.mem}%</strong></p>
+        <p class="muted" style="margin:0 0 8px;font-size:14px;">Installed Models: ${selectedMachine.models.map(x=>`<code>${x}</code>`).join(', ') || 'None (Mobile approval & monitoring client)'}</p>
+        <div class="mono" style="font-size:12px;padding:10px 12px;border-radius:8px;background:var(--surface-soft);">
+          Execution Graph State: <strong>${playbackStage}</strong> · Pipeline: User Request → Planner → Model Router → Worker (${selectedMachine.id}) → Tool Execution → Verification → Result
+        </div>
+      `;
+    }
+    window.selectDemoMachine = (id) => { selectedMachine = DEMO_MACHINES.find(m=>m.id===id)||DEMO_MACHINES[0]; renderTopology(); };
+    document.getElementById('demo-search').oninput = renderTopology;
+    document.getElementById('demo-os-filter').onchange = renderTopology;
+    document.getElementById('demo-zoom-in').onclick = () => { demoZoom = Math.min(1.25, +(demoZoom+0.1).toFixed(2)); renderTopology(); };
+    document.getElementById('demo-zoom-out').onclick = () => { demoZoom = Math.max(0.8, +(demoZoom-0.1).toFixed(2)); renderTopology(); };
+    document.getElementById('demo-play-btn').onclick = () => {
+      const stages = [
+        'Planned (Parsing goal on demo-mac)',
+        'Queued (PolicyEngine check passed)',
+        'Running (Dispatched to demo-linux · qwen3-coder:30b)',
+        'Verifying (Running test suite & assurance oracle)',
+        'Completed and verified (41/41 tests pass)'
+      ];
+      let i = 0;
+      const t = setInterval(() => {
+        selectedMachine = DEMO_MACHINES[i % DEMO_MACHINES.length];
+        playbackStage = stages[i] || stages[stages.length - 1];
+        renderTopology();
+        i++;
+        if (i >= stages.length) clearInterval(t);
+      }, 450);
+    };
+    renderTopology();
+
+    // Interactive 8-Step Onboarding (Section 8.6)
+    const STEPS = [
+      { n:1, title:'1. Install Wazir Shell', desc:'Download the verified package for macOS, Linux, or GrapheneOS and verify its SHA-256 checksum against SHA256SUMS.txt.', cmd:'shasum -a 256 -c SHA256SUMS.txt --ignore-missing' },
+      { n:2, title:'2. Review Terms & Diagnostics', desc:'Accept or decline minimal redacted diagnostics on first launch. Declining disables telemetry completely and never blocks your native OS shell.', cmd:'wa diagnostics notice' },
+      { n:3, title:'3. Configure Local Inference', desc:'Discover local Ollama (:11434), MLX (:8080), or LM Studio (:1234) endpoints serving Qwen models.', cmd:'wa doctor --detail' },
+      { n:4, title:'4. Register or Pair a Machine', desc:'Register authorized macOS/Linux workers with WAZIR_REGISTRATION_TOKEN or pair GrapheneOS via scoped URI/QR.', cmd:'wa fleet' },
+      { n:5, title:'5. Run First Native Command', desc:'Type ordinary shell commands (ls -la, git status, pipes) directly in your persistent native PTY—works 100% offline.', cmd:'wa shell -c "git status -sb"' },
+      { n:6, title:'6. Run Natural-Language Task', desc:'Enter an AI request or prefix with ? to trigger governed planning, policy checks, and local Qwen execution.', cmd:'wa shell -c "? find the startup bottleneck in Wazir"' },
+      { n:7, title:'7. Open Mission Control', desc:'Inspect registered machines, live CPU/GPU/memory telemetry, and the 10-state visual execution graph.', cmd:'open -a "Wazir Mission Control"' },
+      { n:8, title:'8. Review Verification Evidence', desc:'Confirm completion through real test/build verification receipts—never unverified LLM self-reporting.', cmd:'wa about --json' },
+    ];
+    let activeStep = 1;
+    function renderOnboarding() {
+      document.getElementById('onboarding-steps').innerHTML = STEPS.map(s => `
+        <button class="comp-btn ${s.n===activeStep?'active':''}" type="button" onclick="selectStep(${s.n})">
+          <div class="mono" style="font-size:11px;color:var(--accent);">Step ${s.n}</div>
+          <strong style="font-size:14px;">${s.title.replace(/^\d+\.\s*/, '')}</strong>
+        </button>
+      `).join('');
+      const cur = STEPS.find(s=>s.n===activeStep) || STEPS[0];
+      document.getElementById('onboarding-detail').innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+          <h3 style="margin:0;">${cur.title}</h3>
+          <span class="pill">Simulated Walkthrough · Step ${cur.n} of 8</span>
+        </div>
+        <p class="muted" style="margin:10px 0 12px;">${cur.desc}</p>
+        <pre class="code-block" style="background:var(--terminal-bg);color:var(--terminal-text);">${cur.cmd}</pre>
+      `;
+    }
+    window.selectStep = (n) => { activeStep = n; renderOnboarding(); };
+    renderOnboarding();
 
     document.getElementById('license-form').addEventListener('submit', async (e) => {
       e.preventDefault();

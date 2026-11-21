@@ -211,3 +211,43 @@ details.faq-item p { margin: 12px 0 0; color: var(--text-secondary); max-width: 
 .footer-col ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
 .footer-col a { color: var(--text-secondary); }
 .footer-col a:hover { color: var(--text); }
+
+/* Component Explorer & Fleet Topology */
+.comp-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 10px;
+}
+.comp-btn {
+  text-align: left;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-family: var(--font-sans);
+  cursor: pointer;
+  transition: border-color var(--duration), background var(--duration);
+}
+.comp-btn:hover {
+  background: var(--surface-hover);
+}
+.comp-btn.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+.topo-wrap {
+  background: var(--terminal-bg);
+  color: var(--terminal-text);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  padding: 16px;
+  overflow: hidden;
+}
+.flow-dot {
+  animation: pulse 2s infinite ease-in-out;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}

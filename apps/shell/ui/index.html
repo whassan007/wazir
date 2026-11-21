@@ -74,13 +74,15 @@
     <div class="tabs" id="tabs"></div>
     <div class="actions">
       <span class="badge" id="diag-badge">Diagnostics: Pending</span>
+      <button id="ctrlc-btn" title="Send SIGINT (Ctrl+C) to active PTY">Ctrl+C</button>
+      <button id="clear-btn" title="Clear terminal buffer">Clear</button>
       <button id="new-tab-btn">+ Tab</button>
       <button id="mc-btn" class="primary">Mission Control</button>
       <button id="about-btn">About</button>
     </div>
   </header>
 
-  <main id="terminal-output" aria-live="polite"></main>
+  <main id="terminal-output" aria-live="polite" tabindex="0" title="Click here for direct interactive PTY keyboard input, or use the command bar below"></main>
 
   <form class="composer" id="cmd-form">
     <select id="mode-select" aria-label="Execution mode">
@@ -211,6 +213,42 @@
           renderOutput();
         }
       }
+    });
+
+    document.getElementById('ctrlc-btn').onclick = async () => {
+      if (invoke && activeId) await invoke('pty_write', { sessionId: activeId, data: '\x03' });
+    };
+    document.getElementById('clear-btn').onclick = () => {
+      const active = tabs.find(t => t.id === activeId);
+      if (active) { active.buffer = ''; renderOutput(); }
+    };
+    outputEl.addEventListener('keydown', async (e) => {
+      if (!invoke || !activeId) return;
+      if (e.ctrlKey && e.key.toLowerCase() === 'c') {
+        e.preventDefault();
+        await invoke('pty_write', { sessionId: activeId, data: '\x03' });
+      } else if (e.ctrlKey && e.key.toLowerCase() === 'd') {
+        e.preventDefault();
+        await invoke('pty_write', { sessionId: activeId, data: '\x04' });
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        await invoke('pty_write', { sessionId: activeId, data: '\r' });
+      } else if (e.key === 'Backspace') {
+        e.preventDefault();
+        await invoke('pty_write', { sessionId: activeId, data: '\x7f' });
+      } else if (e.key === 'Tab') {
+        e.preventDefault();
+        await invoke('pty_write', { sessionId: activeId, data: '\t' });
+      } else if (e.key.length === 1 && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault();
+        await invoke('pty_write', { sessionId: activeId, data: e.key });
+      }
+    });
+    window.addEventListener('resize', async () => {
+      if (!invoke || !activeId) return;
+      const cols = Math.max(40, Math.floor(outputEl.clientWidth / 8));
+      const rows = Math.max(12, Math.floor(outputEl.clientHeight / 19));
+      try { await invoke('pty_resize', { sessionId: activeId, cols, rows }); } catch {}
     });
 
     document.getElementById('new-tab-btn').onclick = createTab;

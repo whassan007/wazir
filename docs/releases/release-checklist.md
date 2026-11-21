@@ -7,5 +7,5 @@
 - [x] `@wazir/observability` diagnostics consent, redaction, and adversarial leakage tests pass.
 - [x] `NOTICE`, `AUTHORS`, `CONTRIBUTORS`, `THIRD_PARTY_LICENSES.md`, `LICENSE-COMMERCIAL.md`, `docs/legal/licensing-audit.md` present.
 - [ ] Apple Developer ID signing/notarization (external gate: requires Apple Developer credentials if not present).
-- [ ] Public portal `wazir.wael.bot` staging & production verification.
-- [ ] SHA-256 checksum manifest (`dist/SHA256SUMS.txt`), SBOM (`dist/sbom.cdx.json`), and `dist/release-manifest.json` generated.
+- [x] Public portal `wazir.wael.bot` staging & production verification (`HTTP/2 200`, Playwright QA pass).
+- [x] SHA-256 checksum manifest (`dist/SHA256SUMS.txt`), SBOM (`dist/sbom.cdx.json`), and `dist/release-manifest.json` generated.
