@@ -191,6 +191,7 @@ export interface RookEngine {
 
 function guessFamily(id: string, provider: string): ModelRecord['family'] {
   const lower = id.toLowerCase();
+  if (lower.includes('lfm') || lower.includes('liquid') || lower === 'wazir-shell-mini' || provider === 'wazir-embedded') return 'liquid';
   if (lower.includes('qwen')) return 'qwen';
   if (lower.includes('gpt')) return 'gpt';
   if (lower.includes('gemma')) return 'gemma';
@@ -664,7 +665,14 @@ export async function createEngine(options: EngineOptions = {}): Promise<RookEng
   // once, here, so all call paths (CLI, TUI, fleet, worker lookups) share the same gate.
   const resources = createResourceSystem(engineConfigDir);
   const govern = (adapter: RuntimeAdapter) => governAdapter(adapter, { budget: resources.budget, resolveAccount: resources.resolveAccount });
+  const embeddedAssets = coreModule.resolveEmbeddedAssetLocations({
+    repoRoot: projectRoot,
+    wazirHome: engineConfigDir,
+  });
   const adapterList: RuntimeAdapter[] = [
+    ...(embeddedAssets.modelPath && embeddedAssets.runtimeBinaryPath
+      ? [coreModule.createLiquidEmbeddedRuntimeAdapter({ repoRoot: projectRoot, wazirHome: engineConfigDir })]
+      : []),
     createMLXAdapter(config.mlxUrl ?? MLX_DEFAULT_BASE_URL),
     createOllamaAdapter(config.ollamaUrl ?? 'http://localhost:11434'),
     createLMStudioAdapter(config.lmstudioUrl ?? 'http://localhost:1234/v1'),
@@ -1478,13 +1486,15 @@ async function applyDiscoveredRuntime(
     ? discoveredRuntime.id.slice(discoveredRuntime.id.lastIndexOf(':') + 1)
     : discoveredRuntime.id;
   const runtimeType: RuntimeType =
-    baseId === 'mlx'
-      ? 'mlx'
-      : baseId === 'ollama'
-        ? 'ollama'
-        : baseId === 'lmstudio'
-          ? 'lmstudio'
-          : 'other';
+    baseId === 'wazir-embedded'
+      ? 'wazir-embedded'
+      : baseId === 'mlx'
+        ? 'mlx'
+        : baseId === 'ollama'
+          ? 'ollama'
+          : baseId === 'lmstudio'
+            ? 'lmstudio'
+            : 'other';
 
   const existing = runtimes.get(discoveredRuntime.id);
   runtimes.register({
@@ -1609,19 +1619,21 @@ function registerModel(
         : 'default-unknown';
 
   const existingRecord = models.get(discovered.id);
-  const localPriority = (p: string): number => (p === 'mlx' ? 1 : p === 'ollama' ? 2 : p === 'lmstudio' ? 3 : 4);
+  const localPriority = (p: string): number => (p === 'wazir-embedded' ? 0 : p === 'mlx' ? 1 : p === 'ollama' ? 2 : p === 'lmstudio' ? 3 : 4);
   const effectiveProvider =
     existingRecord && existingRecord.local && localPriority(existingRecord.provider) < localPriority(provider)
       ? existingRecord.provider
       : provider;
   const currentCompat: RuntimeType[] | 'any' =
-    provider === 'mlx'
-      ? ['mlx']
-      : provider === 'ollama'
-        ? ['ollama']
-        : provider === 'lmstudio'
-          ? ['lmstudio']
-          : 'any';
+    provider === 'wazir-embedded'
+      ? ['wazir-embedded']
+      : provider === 'mlx'
+        ? ['mlx']
+        : provider === 'ollama'
+          ? ['ollama']
+          : provider === 'lmstudio'
+            ? ['lmstudio']
+            : 'any';
   const mergedCompat: RuntimeType[] | 'any' =
     currentCompat === 'any' || existingRecord?.runtimeCompatibility === 'any'
       ? 'any'

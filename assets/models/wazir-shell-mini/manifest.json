@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "wazirModelId": "wazir-shell-mini",
+  "runtimeProvider": "wazir-embedded",
+  "role": "Shell-intent parser and tool router",
+  "upstream": {
+    "baseModel": "LiquidAI/LFM2.5-350M",
+    "baseModelUrl": "https://huggingface.co/LiquidAI/LFM2.5-350M",
+    "ggufRepository": "LiquidAI/LFM2.5-350M-GGUF",
+    "ggufRepositoryUrl": "https://huggingface.co/LiquidAI/LFM2.5-350M-GGUF",
+    "pinnedRevision": "657e078c94084481950a2d555a941481f715536b",
+    "architecture": "lfm2",
+    "parameters": "350M",
+    "quantization": "Q4_K_M"
+  },
+  "modelArtifact": {
+    "filename": "LFM2.5-350M-Q4_K_M.gguf",
+    "relativePath": "assets/models/wazir-shell-mini/LFM2.5-350M-Q4_K_M.gguf",
+    "sizeBytes": 229129280,
+    "sha256": "7e6f72643caafc9a68256686638c4d7916f2cec76d1df478d4c3ddcd95a6aed4",
+    "contextMax": 32768,
+    "configuredContext": 4096,
+    "maxOutputTokens": 96,
+    "estimatedResidentMemoryMB": 380,
+    "minFreeMemoryMB": 400
+  },
+  "license": {
+    "name": "LFM Open License v1.0",
+    "copyrightHolder": "Liquid AI, Inc.",
+    "licenseFile": "assets/models/wazir-shell-mini/LICENSE-LFM-1.0.txt",
+    "licenseSha256": "5188f2b355da20647257a3156db5834c794e5fb5e6d8dc4d4cdbb3180e75b85b",
+    "commercialAnnualRevenueLimitUSD": 10000000,
+    "commercialNote": "Free for academic, research, and commercial use for entities under $10,000,000 USD annual revenue. Entities reaching or exceeding $10,000,000 USD annual revenue must obtain a commercial agreement from Liquid AI, Inc.",
+    "wazirSoftwareLicense": "AGPL-3.0-only (kept strictly separate from model weights license)"
+  },
+  "runtime": {
+    "engine": "llama.cpp",
+    "upstreamUrl": "https://github.com/ggml-org/llama.cpp",
+    "license": "MIT",
+    "bindAddress": "127.0.0.1",
+    "networkExposure": "loopback-only",
+    "platforms": {
+      "darwin-arm64": {
+        "binary": "assets/runtimes/darwin-arm64/llama-server",
+        "sha256": "d707b6db4c1397a7383176fba12d339e5b33c7513669d74c8fbc2a76f6979a72",
+        "version": "0.4.0-dev (build 10909, commit 329b6160f)",
+        "acceleration": ["metal", "accelerate", "blas", "arm64-neon"]
+      },
+      "linux-arm64": {
+        "binary": "assets/runtimes/linux-arm64/llama-server",
+        "sha256": "0b57de23c70159152bf61cfb6c7113431c8921b1c072178edea2d1f5252faa2b",
+        "version": "0.9.0-dev (build 12347, commit c2cf5f983)",
+        "acceleration": ["armv9-sve", "armv8-neon", "openmp"]
+      }
+    }
+  },
+  "toolCatalog": {
+    "version": "1.0.0",
+    "delimiterFormat": "<|tool_call_start|>[tool_name(arg=value)]<|tool_call_end|>",
+    "evalPermitted": false,
+    "directShellExecutionPermitted": false
+  }
+}

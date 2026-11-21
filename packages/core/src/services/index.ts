@@ -392,3 +392,4 @@ export type {
 export * from './harnessAssembler.js';
 export * from './shellClassifier.js';
 export * from './fastOrchestrator.js';
+export * from './liquidShellOrchestrator.js';

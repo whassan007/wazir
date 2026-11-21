@@ -3,6 +3,7 @@ import type { ModelCapability } from './capability.js';
 
 export type ModelFamily =
   | 'qwen'
+  | 'liquid'
   | 'gpt'
   | 'gemma'
   | 'nemotron'
@@ -203,6 +204,13 @@ export function estimateModelMemory(
     const is8Bit = quantization?.toLowerCase().includes('q8') || quantization?.toLowerCase().includes('8bit');
     const is16Bit = quantization?.toLowerCase().includes('16') || quantization?.toLowerCase().includes('f16');
     const bytesPerParam = is16Bit ? 2.2 : is8Bit ? 1.2 : 0.75;
+    if (paramBillion < 0.75) {
+      const subBillionGB = Number(Math.max(0.45, paramBillion * bytesPerParam + 0.35).toFixed(2));
+      return {
+        minSystemGB: subBillionGB,
+        minGpuGB: undefined,
+      };
+    }
     const estimatedGB = Math.max(1, Math.ceil(paramBillion * bytesPerParam + 1.5));
     return {
       minSystemGB: estimatedGB,

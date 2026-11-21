@@ -27,5 +27,16 @@ LICENSING BOUNDARIES & ATTRIBUTION
    candidate) paired with separate commercial authorization, pending formal
    legal review.
 
-4. Third-Party Dependencies:
+4. Bundled Embedded Edge Model (LFM Open License v1.0):
+   "LFM 2.5 is licensed under the LFM Open License v1.0, Copyright (c) Liquid AI, Inc. All Rights Reserved."
+   Bundled shell-intent routing weights (`wazir-shell-mini`, exact file
+   `assets/models/wazir-shell-mini/LFM2.5-350M-Q4_K_M.gguf` from
+   `LiquidAI/LFM2.5-350M-GGUF` at revision `657e078c94084481950a2d555a941481f715536b`)
+   are licensed separately from Wazir's AGPL-3.0-only software under the
+   LFM Open License v1.0. Commercial use by legal entities reaching or exceeding
+   $10,000,000 USD in annual revenue requires a separate commercial license from
+   Liquid AI, Inc. See `assets/models/wazir-shell-mini/LICENSE-LFM-1.0.txt` and
+   `docs/legal/lfm-license-compliance.md` for full terms.
+
+5. Third-Party Dependencies:
    See THIRD_PARTY_LICENSES.md for third-party dependency attributions.

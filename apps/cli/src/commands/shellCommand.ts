@@ -6,17 +6,23 @@ import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { performance } from 'node:perf_hooks';
 import type { Command } from 'commander';
 import {
+  LIQUID_SHELL_MODEL_ID,
+  LIQUID_SHELL_PROVIDER,
   MUTATION_TOOLS,
+  PolicyEngine,
   ShellLatencyTracker,
   WAZIR_SHELL_COMMANDS,
   classifyShellInput,
   classifyWithFastOrchestrator,
   discoverOptionalShellTools,
   evaluateSafeArithmetic,
+  executeLiquidShellRequest,
   formatLocalDate,
   formatLocalTime,
   formatLocalTimeAndDate,
+  isLiquidShellEligibleRequest,
   isPathInside,
+  resolveEmbeddedAssetLocations,
   terminateProcessTree,
   type ExecutionPhase,
   type OptionalShellToolStatus,
@@ -1465,8 +1471,95 @@ export function createShellAiHandler(handlerOpts: CreateShellAiHandlerOptions = 
       env: s.env,
     });
 
+    const isLiquidPathB =
+      (classificationDecision.handler === 'wazir-shell-mini' ||
+        isLiquidShellEligibleRequest(request) ||
+        s.model === LIQUID_SHELL_MODEL_ID) &&
+      s.env.WAZIR_DISABLE_EMBEDDED_MODEL !== '1' &&
+      !(s.model && s.model !== LIQUID_SHELL_MODEL_ID && (s.model.startsWith('nvidia/') || s.model.startsWith('external:')));
+
+    if (isLiquidPathB) {
+      const embeddedAssets = resolveEmbeddedAssetLocations({
+        wazirHome: wazirHome || undefined,
+        env: s.env,
+      });
+      if (embeddedAssets.modelPath && embeddedAssets.runtimeBinaryPath) {
+        const dispatchReadyPerf = performance.now();
+        const policy = new PolicyEngine({ projectRoot: s.cwd });
+        attachShellPermissionPolicy(policy, () => s.permissionMode, handlerOpts);
+        const liquidRes = await executeLiquidShellRequest(request, {
+          cwd: s.cwd,
+          projectRoot: s.cwd,
+          policy,
+          permissionMode: s.permissionMode,
+          wazirHome: wazirHome || undefined,
+          signal,
+          approveMutatingTool: handlerOpts.confirmToolApproval
+            ? async (call) =>
+                handlerOpts.confirmToolApproval!({
+                  tool: call.name,
+                  input: call.arguments,
+                  reason: `Liquid Shell mutating tool '${call.name}' requires approval`,
+                })
+            : undefined,
+        });
+
+        if (!liquidRes.escalated) {
+          const totalExecutionMs = Math.max(0, performance.now() - requestStartPerf);
+          const status = liquidRes.ok ? 'success' : signal?.aborted ? 'cancelled' : 'error';
+          if (liquidRes.ok) {
+            if (liquidRes.output.trim()) {
+              console.log(liquidRes.output.trimEnd());
+            }
+          } else {
+            console.error(`[wazir-shell-mini] ${liquidRes.error ?? 'Tool execution failed'}`);
+          }
+          tracker.record({
+            input: request,
+            tier: 2,
+            handler: 'wazir-shell-mini',
+            inputToDispatchMs: Math.max(0, dispatchReadyPerf - requestStartPerf),
+            classificationMs: 0,
+            modelSelectionMs: 0,
+            modelLoadMs: liquidRes.coldLoadMs,
+            firstTokenMs: liquidRes.inferenceMs,
+            totalExecutionMs,
+            orchestrationOverheadMs: Math.max(0, totalExecutionMs - liquidRes.inferenceMs),
+            outputTokens: liquidRes.outputTokens,
+            toolInvocationCount: liquidRes.parsedCall ? 1 : 0,
+            status,
+            ...(liquidRes.error ? { error: liquidRes.error } : {}),
+            model: LIQUID_SHELL_MODEL_ID,
+            provider: LIQUID_SHELL_PROVIDER,
+          });
+          s.lastAiOutcome = {
+            success: liquidRes.ok,
+            modelId: LIQUID_SHELL_MODEL_ID,
+            runtimeId: LIQUID_SHELL_PROVIDER,
+            computerId: 'local',
+            result: liquidRes.output,
+            ...(liquidRes.error ? { errors: [liquidRes.error], reasons: [liquidRes.error] } : {}),
+          };
+          if (isDebug) {
+            console.log(
+              `[wazir-ai] path=B model=${LIQUID_SHELL_MODEL_ID} runtime=${LIQUID_SHELL_PROVIDER} tool=${liquidRes.parsedCall?.name ?? 'none'} inferenceMs=${Math.round(liquidRes.inferenceMs)} success=${liquidRes.ok}`,
+            );
+          }
+          void tracker.flushToFileAsync(getFastLatencyFilePath(wazirHome || undefined));
+          return liquidRes.ok ? 0 : signal?.aborted ? 130 : 1;
+        }
+
+        if (isDebug) {
+          console.log(
+            `[wazir-debug] Path B wazir-shell-mini escalated to Path C: ${liquidRes.escalationReason ?? 'complex task'}`,
+          );
+        }
+      }
+    }
+
     const isTier2Eligible =
       classificationDecision.tier === 2 &&
+      classificationDecision.handler !== 'wazir-shell-mini' &&
       !(s.model && (s.model.startsWith('nvidia/') || s.model.startsWith('external:')));
 
     if (isTier2Eligible) {

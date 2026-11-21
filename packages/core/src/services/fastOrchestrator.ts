@@ -11,6 +11,13 @@ import {
   type ShellRoutingMode,
   type WazirShellCommandName,
 } from './shellClassifier.js';
+import {
+  LIQUID_SHELL_MODEL_ID,
+  LIQUID_SHELL_PROVIDER,
+  executeLiquidShellRequest,
+  isLiquidShellEligibleRequest,
+  resolveEmbeddedAssetLocations,
+} from './liquidShellOrchestrator.js';
 import { computeLatencyPercentiles } from './telemetryService.js';
 
 export type ExecutionTier = 0 | 1 | 2 | 3;
@@ -942,7 +949,11 @@ export function matchTier0Intent(
     };
   }
 
-  if (/^(?:where\s+am\s+i|what\s+is\s+my\s+current\s+directory|current\s+directory|working\s+directory)\s*\??$/i.test(normalized)) {
+  if (
+    /^(?:where\s+am\s+i|what\s+directory\s+am\s+i\s+in|which\s+directory\s+am\s+i\s+in|what\s+folder\s+am\s+i\s+in|what\s+is\s+my\s+current\s+directory|current\s+directory|working\s+directory)\s*\??$/i.test(
+      normalized,
+    )
+  ) {
     return {
       tier: 0,
       handler: 'tier0-builtin',
@@ -1180,6 +1191,19 @@ function buildAiRoutingDecision(
   classified: ShellClassification,
   options: FastOrchestratorClassifyOptions,
 ): RoutingDecision {
+  if (!options.forceTier3 && isLiquidShellEligibleRequest(aiRequest)) {
+    return {
+      tier: 2,
+      handler: 'wazir-shell-mini',
+      reason: 'Path B bundled Liquid AI shell intent router (wazir-shell-mini)',
+      model: options.overrideModel ?? options.pinnedModel ?? LIQUID_SHELL_MODEL_ID,
+      provider: LIQUID_SHELL_PROVIDER,
+      confidence: 0.96,
+      normalizedInput,
+      requiresConfirmation: classified.requiresConfirmation,
+    };
+  }
+
   const complexity = needsTier3Orchestration(aiRequest, classified, options.forceTier3);
 
   if (complexity.tier3) {
@@ -1251,7 +1275,7 @@ export function classifyWithFastOrchestrator(
   }
 
   // Delegate base shell/AI/wazir/control/ambiguous classification to shellClassifier
-  const classified = classifyShellInput(normalizedInput, sessionMode);
+  const classified = classifyShellInput(rawInput.trim(), sessionMode);
 
   if (classified.mode === 'control') {
     return {

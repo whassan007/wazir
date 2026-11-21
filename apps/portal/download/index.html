@@ -95,10 +95,11 @@
           <details style="font-size:13px;color:var(--text-secondary);">
             <summary style="cursor:pointer;font-weight:500;color:var(--text);">System requirements &amp; installation instructions</summary>
             <ul style="padding-left:18px;margin-top:8px;">
-              <li>macOS 14+ (Apple Silicon) or Ubuntu 24.04+ / Debian / Fedora</li>
-              <li>Node.js 22.13+ for CLI/worker runtime</li>
-              <li>Verify checksum: <code>shasum -a 256 -c SHA256SUMS.txt</code></li>
-              <li>Note: macOS archives are unsigned development builds (no Apple Developer ID notarization yet).</li>
+              <li>macOS 14+ (Apple Silicon / Intel), Ubuntu 24.04+ / Debian / Fedora, or Windows 11 (x64 / ARM64)</li>
+              <li>Node.js 22.13+ for CLI/worker runtime (built-in <code>node:sqlite</code> ledger)</li>
+              <li>Verify checksum: <code>shasum -a 256 -c SHA256SUMS.txt --ignore-missing</code></li>
+              <li>Verify install: <code>wa about &amp;&amp; wa doctor &amp;&amp; wa route "explain chmod 755"</code></li>
+              <li>Note: macOS archives are unsigned development builds — run <code>xattr -cr "/Applications/Wazir Shell.app"</code> if Gatekeeper prompts.</li>
             </ul>
           </details>
         </article>
@@ -222,7 +223,8 @@
             <button class="tab-btn active" data-plat="macos" onclick="selectTermPlatform('macos', this)">macOS</button>
             <button class="tab-btn" data-plat="debian" onclick="selectTermPlatform('debian', this)">Ubuntu / Debian</button>
             <button class="tab-btn" data-plat="fedora" onclick="selectTermPlatform('fedora', this)">Fedora / RHEL</button>
-            <button class="tab-btn" data-plat="linux" onclick="selectTermPlatform('linux', this)">Other Linux</button>
+            <button class="tab-btn" data-plat="linux" onclick="selectTermPlatform('linux', this)">Source Checkout</button>
+            <button class="tab-btn" data-plat="windows" onclick="selectTermPlatform('windows', this)">Windows 11</button>
             <button class="tab-btn" data-plat="termux" onclick="selectTermPlatform('termux', this)">GrapheneOS / Termux</button>
           </div>
           <button id="copy-cmd-btn" class="btn sm" type="button" style="background:rgba(255,255,255,0.1);color:#faf9f5;border-color:rgba(255,255,255,0.2);">Copy command</button>
@@ -489,23 +491,27 @@ git checkout v0.4.0 &amp;&amp; npm install &amp;&amp; npm run build</pre>
     // Terminal install tabs
     const TERM_PLATS = {
       macos: {
-        cmd: `curl -LO ${ORIGIN}/releases/wazir-cli-0.4.1-any.tar.gz\ncurl -LO ${ORIGIN}/releases/SHA256SUMS.txt\nshasum -a 256 -c SHA256SUMS.txt --ignore-missing\ntar -xzf wazir-cli-0.4.1-any.tar.gz\nnode bin/wa.js about`,
-        arch: 'arm64 (Apple Silicon)', dest: './bin/wa.js or /usr/local/bin/wa', verify: 'wa about && wa doctor', upgrade: 'Re-download & verify new tarball', uninstall: 'rm -rf ~/.wazir bin/wa.js'
+        cmd: `curl -LO ${ORIGIN}/releases/wazir-cli-0.4.1-any.tar.gz\ncurl -LO ${ORIGIN}/releases/SHA256SUMS.txt\nshasum -a 256 -c SHA256SUMS.txt --ignore-missing\ntar -xzf wazir-cli-0.4.1-any.tar.gz\nnode bin/wa.js about && node bin/wa.js doctor\n\n# Or via Homebrew:\nbrew tap whassan007/tap && brew install wazir`,
+        arch: 'arm64 / x86_64', dest: '~/.local/bin/wa (source) or /opt/homebrew/bin/wa', verify: 'wa about && wa doctor && wa route "explain chmod 755"', upgrade: 'brew upgrade wazir (or re-run bash scripts/install.sh)', uninstall: 'brew uninstall wazir && rm -rf ~/.wazir'
       },
       debian: {
-        cmd: `curl -LO ${ORIGIN}/releases/wazir_0.4.1_all.deb\ncurl -LO ${ORIGIN}/releases/SHA256SUMS.txt\nsha256sum -c SHA256SUMS.txt --ignore-missing\nsudo dpkg -i wazir_0.4.1_all.deb`,
-        arch: 'x86_64, arm64', dest: '/usr/bin/wa & systemd units', verify: 'wa about && wa doctor', upgrade: 'sudo dpkg -i wazir_<ver>_all.deb', uninstall: 'sudo apt remove wazir'
+        cmd: `curl -LO ${ORIGIN}/releases/wazir_0.4.1_all.deb\ncurl -LO ${ORIGIN}/releases/SHA256SUMS.txt\nsha256sum -c SHA256SUMS.txt --ignore-missing\nsudo dpkg -i wazir_0.4.1_all.deb\nwa about && wa doctor`,
+        arch: 'x86_64, arm64', dest: '/usr/bin/wa & systemd units', verify: 'wa about && wa doctor && wa shell -c "version"', upgrade: 'sudo dpkg -i wazir_<ver>_all.deb', uninstall: 'sudo apt remove wazir'
       },
       fedora: {
-        cmd: `curl -LO ${ORIGIN}/releases/wazir-0.4.1.tar.gz\ntar -xzf wazir-0.4.1.tar.gz\nrpmbuild -tb wazir-0.4.1.tar.gz`,
-        arch: 'x86_64, arm64', dest: '/usr/bin/wa', verify: 'wa about', upgrade: 'sudo dnf upgrade wazir', uninstall: 'sudo dnf remove wazir'
+        cmd: `curl -LO ${ORIGIN}/releases/wazir-0.4.1.tar.gz\ncurl -LO ${ORIGIN}/releases/SHA256SUMS.txt\nsha256sum -c SHA256SUMS.txt --ignore-missing\ntar -xzf wazir-0.4.1.tar.gz\nrpmbuild -tb wazir-0.4.1.tar.gz`,
+        arch: 'x86_64, arm64', dest: '/usr/bin/wa', verify: 'wa about && wa doctor', upgrade: 'sudo dnf upgrade wazir', uninstall: 'sudo dnf remove wazir'
       },
       linux: {
-        cmd: `git clone https://github.com/whassan007/wazir.git\ncd wazir && npm install && npm run build\nnode bin/wa.js shell`,
-        arch: 'x86_64, arm64', dest: './bin/wa.js', verify: 'node bin/wa.js doctor', upgrade: 'git pull && npm run build', uninstall: 'rm -rf wazir ~/.wazir'
+        cmd: `git clone https://github.com/whassan007/wazir.git ~/Code/Wazir\nbash ~/Code/Wazir/scripts/install.sh\nwa about && wa doctor && wa latency`,
+        arch: 'x86_64, arm64 (Linux / macOS)', dest: '~/.local/bin/wa & ~/.local/bin/wazir', verify: 'wa about && wa doctor && wa shell -c "2 + 2"', upgrade: 'git pull && bash scripts/install.sh', uninstall: 'rm -f ~/.local/bin/wa ~/.local/bin/wazir && rm -rf ~/.wazir'
+      },
+      windows: {
+        cmd: `# Option 1: PowerShell source installer (Node >= 22.13, no WSL2 required)\ngit clone https://github.com/whassan007/wazir.git $HOME\\Code\\Wazir\n& "$HOME\\Code\\Wazir\\scripts\\install.ps1"\n\n# Option 2: WinGet or Scoop\nwinget install Whassan.Wazir\n# scoop bucket add wazir https://github.com/whassan007/wazir && scoop install wazir`,
+        arch: 'x64, arm64 (Native Windows 11)', dest: '%USERPROFILE%\\.wazir\\bin\\wa.cmd', verify: 'wa about && wa doctor', upgrade: 'winget upgrade Whassan.Wazir (or scoop update wazir)', uninstall: 'winget uninstall Whassan.Wazir'
       },
       termux: {
-        cmd: `pkg update -y && pkg install -y nodejs-lts git\ngit clone https://github.com/whassan007/wazir.git\ncd wazir && bash scripts/install-termux.sh`,
+        cmd: `pkg update -y && pkg install -y nodejs-lts git openssh\ngit clone https://github.com/whassan007/wazir.git\ncd wazir && bash scripts/install-termux.sh\nwa about && wa shell --no-ai`,
         arch: 'aarch64 (ARM64)', dest: '$PREFIX/bin/wa', verify: 'wa about && wa shell --no-ai', upgrade: 'git pull && bash scripts/install-termux.sh', uninstall: 'rm -rf ~/wazir-cli $PREFIX/bin/wa'
       },
     };
@@ -561,7 +567,8 @@ git checkout v0.4.0 &amp;&amp; npm install &amp;&amp; npm run build</pre>
       ['What is the difference between Wazir Shell and Mission Control?', 'Wazir Shell is your native PTY terminal for commands and AI requests. Mission Control is the separate graphical operations console for monitoring machines, jobs, approvals, and execution graphs.'],
       ['Can I use ordinary Linux and macOS commands?', 'Yes. Known shell commands, builtins, pipes, and `!`-prefixed lines run directly in your persistent native PTY.'],
       ['Does Wazir work without an internet connection?', 'Yes. Ordinary shell commands and local inference (Ollama, MLX, LM Studio) work completely offline.'],
-      ['Which local AI models are supported?', 'Qwen (Qwen3-Coder, Qwen3.5, Qwen3.6), Gemma, and any OpenAI-compatible or Ollama local model.'],
+      ['Which local AI models are supported?', 'Qwen (Qwen3-Coder, Qwen3.5, Qwen3.6), Gemma 4, LiquidAI LFM2.5 (wazir-shell-mini), and any OpenAI-compatible, Ollama, MLX, or LM Studio local model.'],
+      ['How do I train or fine-tune wazir-shell-mini?', 'Run `node scripts/generate-shell-training-dataset.mjs` to build the 18-tool ChatML dataset and `python3 scripts/train-wazir-shell-mini.py` (documented in `docs/training/WAZIR_TRAINING_GUIDE.md`) to LoRA fine-tune and quantize to GGUF Q4_K_M.'],
       ['Can I use Qwen, LM Studio, or Ollama?', 'Yes. Wazir discovers and routes to Ollama, LM Studio, and MLX servers automatically.'],
       ['Can Wazir execute tasks on another computer?', 'Yes. Registered Wazir Workers on Linux, macOS, or Windows accept authenticated, lease-fenced tasks over SSE.'],
       ['Which Linux distributions are supported?', 'Ubuntu / Debian (.deb), Fedora / RHEL (RPM spec), and source builds on Linux x86_64 and ARM64.'],

@@ -92,3 +92,8 @@ apps/android/.idea/
 
 # Formal assurance toolchain cache (JARs, venvs, binaries)
 /tools/
+
+# Local large binary model weights (>100 MB GitHub blob limit) and native runtime binaries
+# (model cards, LICENSE-LFM-1.0.txt, and manifest.json remain tracked in git)
+assets/models/**/*.gguf
+assets/runtimes/

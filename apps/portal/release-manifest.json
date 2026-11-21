@@ -1,9 +1,81 @@
 {
   "name": "Wazir AI OS",
   "version": "0.4.1",
-  "releasedAt": "2026-11-21T22:40:35.977Z",
+  "releasedAt": "2026-11-21T23:31:45.224Z",
   "repository": "https://github.com/whassan007/wazir",
   "checksumsUrl": "/releases/SHA256SUMS.txt",
+  "bundledModel": {
+    "schemaVersion": 1,
+    "wazirModelId": "wazir-shell-mini",
+    "runtimeProvider": "wazir-embedded",
+    "role": "Shell-intent parser and tool router",
+    "upstream": {
+      "baseModel": "LiquidAI/LFM2.5-350M",
+      "baseModelUrl": "https://huggingface.co/LiquidAI/LFM2.5-350M",
+      "ggufRepository": "LiquidAI/LFM2.5-350M-GGUF",
+      "ggufRepositoryUrl": "https://huggingface.co/LiquidAI/LFM2.5-350M-GGUF",
+      "pinnedRevision": "657e078c94084481950a2d555a941481f715536b",
+      "architecture": "lfm2",
+      "parameters": "350M",
+      "quantization": "Q4_K_M"
+    },
+    "modelArtifact": {
+      "filename": "LFM2.5-350M-Q4_K_M.gguf",
+      "relativePath": "assets/models/wazir-shell-mini/LFM2.5-350M-Q4_K_M.gguf",
+      "sizeBytes": 229129280,
+      "sha256": "7e6f72643caafc9a68256686638c4d7916f2cec76d1df478d4c3ddcd95a6aed4",
+      "contextMax": 32768,
+      "configuredContext": 4096,
+      "maxOutputTokens": 96,
+      "estimatedResidentMemoryMB": 380,
+      "minFreeMemoryMB": 400
+    },
+    "license": {
+      "name": "LFM Open License v1.0",
+      "copyrightHolder": "Liquid AI, Inc.",
+      "licenseFile": "assets/models/wazir-shell-mini/LICENSE-LFM-1.0.txt",
+      "licenseSha256": "5188f2b355da20647257a3156db5834c794e5fb5e6d8dc4d4cdbb3180e75b85b",
+      "commercialAnnualRevenueLimitUSD": 10000000,
+      "commercialNote": "Free for academic, research, and commercial use for entities under $10,000,000 USD annual revenue. Entities reaching or exceeding $10,000,000 USD annual revenue must obtain a commercial agreement from Liquid AI, Inc.",
+      "wazirSoftwareLicense": "AGPL-3.0-only (kept strictly separate from model weights license)"
+    },
+    "runtime": {
+      "engine": "llama.cpp",
+      "upstreamUrl": "https://github.com/ggml-org/llama.cpp",
+      "license": "MIT",
+      "bindAddress": "127.0.0.1",
+      "networkExposure": "loopback-only",
+      "platforms": {
+        "darwin-arm64": {
+          "binary": "assets/runtimes/darwin-arm64/llama-server",
+          "sha256": "d707b6db4c1397a7383176fba12d339e5b33c7513669d74c8fbc2a76f6979a72",
+          "version": "0.4.0-dev (build 10909, commit 329b6160f)",
+          "acceleration": [
+            "metal",
+            "accelerate",
+            "blas",
+            "arm64-neon"
+          ]
+        },
+        "linux-arm64": {
+          "binary": "assets/runtimes/linux-arm64/llama-server",
+          "sha256": "0b57de23c70159152bf61cfb6c7113431c8921b1c072178edea2d1f5252faa2b",
+          "version": "0.9.0-dev (build 12347, commit c2cf5f983)",
+          "acceleration": [
+            "armv9-sve",
+            "armv8-neon",
+            "openmp"
+          ]
+        }
+      }
+    },
+    "toolCatalog": {
+      "version": "1.0.0",
+      "delimiterFormat": "<|tool_call_start|>[tool_name(arg=value)]<|tool_call_end|>",
+      "evalPermitted": false,
+      "directShellExecutionPermitted": false
+    }
+  },
   "artifacts": [
     {
       "filename": "Wazir-Shell-0.4.1-macos-arm64.tar.gz",
@@ -11,7 +83,7 @@
       "arch": "arm64",
       "sizeBytes": 5390970,
       "sizeHuman": "5.14 MB",
-      "sha256": "c867be75c28c6bb5bd14297c0dd77cafc84345fca3698a9bd3109e8d6c8e0007",
+      "sha256": "521bc3ca693e9e88726a5f61e10b629010572ab64441f215db96da68ec5fee0c",
       "signing": "Unsigned development build (Apple Developer ID not configured)",
       "license": "AGPL-3.0-only",
       "url": "/releases/Wazir-Shell-0.4.1-macos-arm64.tar.gz"
@@ -22,7 +94,7 @@
       "arch": "arm64",
       "sizeBytes": 5282103,
       "sizeHuman": "5.04 MB",
-      "sha256": "0f3d1d4d430ca9c88db59459f6ea2a9a173701edec62608b7281a5b4e22d1adf",
+      "sha256": "d7687db9309c8c14290590f5e48d96f5bb9c22ff9877fc230c5d22c22ccf3ffd",
       "signing": "Unsigned development build (Apple Developer ID not configured)",
       "license": "AGPL-3.0-only",
       "url": "/releases/Wazir-Mission-Control-0.4.1-macos-arm64.tar.gz"
@@ -31,9 +103,9 @@
       "filename": "wazir-cli-0.4.1-any.tar.gz",
       "platform": "Universal CLI (macOS / Linux / Termux ARM64)",
       "arch": "x86_64 / arm64",
-      "sizeBytes": 3751474,
-      "sizeHuman": "3.58 MB",
-      "sha256": "c9f4a763df4a7ae85b54047459bfac0244ea95afdb351c71444cbf2ce397fb03",
+      "sizeBytes": 3769915,
+      "sizeHuman": "3.60 MB",
+      "sha256": "3e1739956e91426d3cfd81de3eada2d9c58e4ca7e7521192a78e4d4e62a688b1",
       "signing": "SHA-256 verified bundle",
       "license": "AGPL-3.0-only",
       "url": "/releases/wazir-cli-0.4.1-any.tar.gz"
@@ -53,9 +125,9 @@
       "filename": "wazir-0.4.1.tar.gz",
       "platform": "Linux Source Tarball & RPM Spec",
       "arch": "x86_64 / arm64",
-      "sizeBytes": 3766994,
-      "sizeHuman": "3.59 MB",
-      "sha256": "426cc7aeeb07e2e2bd9142653c2fabd08da41a429522e027caee2a4d8a0beb42",
+      "sizeBytes": 3786280,
+      "sizeHuman": "3.61 MB",
+      "sha256": "a5863a179e2407d84e09be8b01708f5f49eaa99bd87dc910eec65181dccdb598",
       "signing": "SHA-256 verified",
       "license": "AGPL-3.0-only",
       "url": "/releases/wazir-0.4.1.tar.gz"

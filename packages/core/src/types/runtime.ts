@@ -4,6 +4,7 @@ export type RuntimeType =
   | 'lmstudio'
   | 'openai-compatible'
   | 'llama-cpp'
+  | 'wazir-embedded'
   | 'anthropic'
   | 'openai'
   | 'google'

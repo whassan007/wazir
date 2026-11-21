@@ -160,25 +160,25 @@ $ wa pause run-8a4f &amp;&amp; wa resume run-8a4f</pre>
       <div id="demo-inspector" class="card elevated" style="margin-top:16px;" aria-live="polite"></div>
     </section>
 
-    <!-- Section 8.6: Interactive 8-Step Onboarding -->
+    <!-- Section 8.6: Interactive 8-Step Onboarding & Training -->
     <section id="first-run" class="container tight">
-      <h2 class="section-heading">Interactive 8-Step Onboarding</h2>
-      <p class="section-sub">Click any step below to walk through installing Wazir Shell, configuring local Qwen inference, and verifying a distributed task.</p>
+      <h2 class="section-heading">Interactive 8-Step Onboarding &amp; Training</h2>
+      <p class="section-sub">Walk through installing Wazir Shell, inspecting 4-Tier FastOrchestrator routing, running local Qwen / Liquid LFM2.5 inference, and fine-tuning your own offline tool router.</p>
       <div class="grid-4" id="onboarding-steps"></div>
       <div class="card elevated" id="onboarding-detail" style="margin-top:18px;" aria-live="polite"></div>
     </section>
 
-    <!-- Section 8.7: Documentation -->
+    <!-- Section 8.7: Documentation & Training -->
     <section id="docs" class="container tight">
-      <h2 class="section-heading">Documentation &amp; references</h2>
-      <p class="section-sub">Complete operational reference for macOS, Linux, distributed workers, and GrapheneOS.</p>
+      <h2 class="section-heading">Documentation, Training &amp; References</h2>
+      <p class="section-sub">Complete installation, operations, and model fine-tuning references for macOS, Linux, Windows, distributed workers, and GrapheneOS.</p>
       <div class="grid-3">
-        <div class="card"><h3>Quickstart &amp; CLI Reference</h3><p class="muted" style="font-size:14px;">Commands: <code>wa shell</code>, <code>wa exec</code>, <code>wa chat</code>, <code>wa fleet</code>, <code>wa doctor</code>, <code>wa diagnostics</code>, <code>wa about</code>, <code>wa license</code>.</p></div>
-        <div class="card"><h3>Configuration &amp; Providers</h3><p class="muted" style="font-size:14px;">Configure <code>~/.wazir/config.json</code> for local Ollama (<code>:11434</code>), MLX (<code>:8080</code>), LM Studio (<code>:1234</code>), and fleet hosts.</p></div>
-        <div class="card"><h3>Distributed Worker Registration</h3><p class="muted" style="font-size:14px;">Register workers with <code>WAZIR_REGISTRATION_TOKEN</code> over SSE with lease-fenced execution claims.</p></div>
-        <div class="card"><h3>Security Model &amp; Sandboxing</h3><p class="muted" style="font-size:14px;">Workspace realpath containment, PolicyEngine gating, short-lived credentials, and private-fleet authentication.</p></div>
-        <div class="card"><h3>GrapheneOS &amp; Termux Guide</h3><p class="muted" style="font-size:14px;">Unprivileged user-space Android companion (<code>ai.wazir.mobile</code>) and ARM64 Termux CLI without root access.</p></div>
-        <div class="card"><h3>Troubleshooting &amp; Releases</h3><p class="muted" style="font-size:14px;">Run <code>wa doctor --detail</code> to inspect health, or visit <a href="/download#release-history">Release History &amp; Checksums</a>.</p></div>
+        <div class="card"><h3>Quickstart &amp; CLI Reference</h3><p class="muted" style="font-size:14px;">Commands: <code>wa shell</code>, <code>wa route</code>, <code>wa latency</code>, <code>wa debug</code>, <code>wa loop</code>, <code>wa graph</code>, <code>wa goal run</code>, <code>wa doctor</code>, <code>wa diagnostics</code>, <code>wa about</code>.</p></div>
+        <div class="card"><h3>4-Tier FastOrchestrator</h3><p class="muted" style="font-size:14px;">Tier 0 instant builtins (&lt;5ms), Tier 1 persistent native PTY, Tier 2 fast local LLM streaming + <code>wazir-shell-mini</code>, and Tier 3 coding/workflow orchestration.</p></div>
+        <div class="card"><h3>Training &amp; Fine-Tuning</h3><p class="muted" style="font-size:14px;">Generate ChatML tool-calling SFT datasets (<code>generate-shell-training-dataset.mjs</code>), LoRA fine-tune <code>LiquidAI/LFM2.5-350M</code> (<code>train-wazir-shell-mini.py</code>), and follow the <a href="https://github.com/whassan007/wazir/blob/feat/wazir-shell-e2e-repair/docs/training/WAZIR_TRAINING_GUIDE.md" target="_blank" rel="noopener">Training Guide</a>.</p></div>
+        <div class="card"><h3>Configuration &amp; Providers</h3><p class="muted" style="font-size:14px;">Configure <code>~/.wazir/config.json</code> for local Ollama (<code>:11434</code>), MLX (<code>:8080</code>), LM Studio (<code>:1234</code>), <code>networkAllowed=false</code> local-only locks, and fleet hosts.</p></div>
+        <div class="card"><h3>Distributed Workers &amp; Security</h3><p class="muted" style="font-size:14px;">Register workers with <code>WAZIR_REGISTRATION_TOKEN</code> over SSE, workspace realpath containment, PolicyEngine gating, and OS sandboxes (<code>bwrap</code> / <code>sandbox-exec</code>).</p></div>
+        <div class="card"><h3>GrapheneOS, Termux &amp; Releases</h3><p class="muted" style="font-size:14px;">Unprivileged user-space Android companion (<code>ai.wazir.mobile</code>), ARM64 Termux CLI, <code>wa doctor --detail</code>, and <a href="/download#release-history">Release History &amp; Checksums</a>.</p></div>
       </div>
     </section>
 
@@ -217,7 +217,7 @@ $ wa pause run-8a4f &amp;&amp; wa resume run-8a4f</pre>
       <div id="credits-notices" class="card" style="margin-top:20px;">
         <h3>Credits &amp; third-party notices</h3>
         <p class="muted" style="margin-bottom:8px;"><strong>Primary Authorship &amp; Copyright:</strong> Copyright © 2026 Wael Hassan (<code>whassan007</code>). See <code>AUTHORS</code>, <code>CONTRIBUTORS</code>, and <code>NOTICE</code> in the source repository.</p>
-        <p class="muted" style="margin-bottom:0;"><strong>Third-Party Attributions:</strong> Includes selective Apache-2.0 components adapted from <code>QwenLM/qwen-code</code> (Alibaba Group / QwenLM), alongside Tauri, Node.js, and portable-pty runtime dependencies documented in <code>THIRD_PARTY_LICENSES.md</code>.</p>
+        <p class="muted" style="margin-bottom:0;"><strong>Third-Party Attributions:</strong> Includes selective Apache-2.0 components adapted from <code>QwenLM/qwen-code</code> (Alibaba Group / QwenLM), optional embedded edge model weights derived from <code>LiquidAI/LFM2.5-350M-GGUF</code> under <code>LFM Open License v1.0</code>, alongside Tauri, Node.js, llama.cpp, and portable-pty runtime dependencies documented in <code>THIRD_PARTY_LICENSES.md</code>.</p>
       </div>
     </section>
   </main>
@@ -286,10 +286,10 @@ $ wa pause run-8a4f &amp;&amp; wa resume run-8a4f</pre>
 
     // 9 Interactive Components (Section 8.3)
     const COMPONENTS = [
-      { id:'shell', name:'Wazir Shell', status:'Operational · v0.4.1', purpose:'Universal AI-native terminal combining native PTY shell execution, 14 reserved workflow commands (loop, graph, goal, jobs, agents, models, fleet, status, inspect, pause, resume, stop, history, help), and governed AI tasks.', caps:'Persistent cwd/env, pipes, Ctrl+C, ! / \\ / os: escapes, optional tool discovery (fzf, zoxide, rg, bat, atuin, lazygit), offline fallback', deps:'Tauri 2, portable-pty, @wazir/core, @wazir/goals', src:'apps/shell/, apps/cli/src/commands/shellCommand.ts', install:'Download Wazir Shell.app or run wazir / wa shell', cfg:'wazir / wa shell / Wazir Shell.app', interacts:'Executes OS commands in native PTY and shares persistent workflow runs with wa CLI & Mission Control.' },
+      { id:'shell', name:'Wazir Shell', status:'Operational · v0.4.1', purpose:'Universal AI-native terminal combining 4-Tier FastOrchestrator (<5ms Tier 0 builtins, Tier 1 native PTY, Tier 2 fast local LLM streaming + wazir-shell-mini offline tool routing, Tier 3 agent workflows) and 14 reserved commands.', caps:'Persistent cwd/env, pipes, interactive PTY handoff, descendant SIGINT termination, ! / \\ / os: escapes, route/latency/debug telemetry', deps:'Tauri 2, portable-pty, @wazir/core, @wazir/goals', src:'apps/shell/, apps/cli/src/commands/shellCommand.ts', install:'Download Wazir Shell.app or run wazir / wa shell', cfg:'wazir / wa shell / Wazir Shell.app', interacts:'Executes OS commands in native PTY and shares persistent workflow runs with wa CLI & Mission Control.' },
       { id:'mc', name:'Mission Control', status:'Operational · v0.4.1', purpose:'Graphical machine and agent orchestration operations console.', caps:'Interactive machine drill-down, Loop cursor viewer, DAG Graph view, approvals inbox, execution replay', deps:'Tauri 2, @wazir/web, @wazir/api, @wazir/goals', src:'apps/desktop/, apps/web/public/mission-control.html', install:'Download Wazir Mission Control.app', cfg:'npm run desktop:dev / :4801/mission-control.html', interacts:'Streams real-time SSE job state from Wazir Core and worker telemetry from Fleet Registry.' },
-      { id:'core', name:'Wazir Core', status:'Operational · v0.4.1', purpose:'Shared Goal/Loop/Graph orchestration, policy enforcement, persistence, checkpoints, and verification engine.', caps:'WorkflowRuntimeService, ContinuousGoalController, lease fencing, PolicyEngine, ExecutionRecovery', deps:'Node.js >= 22.13, SQLite / Postgres', src:'packages/goals/src/workflow/, packages/core/src/services/, packages/policies/', install:'Included in @wazir/core, @wazir/goals & wa bundle', cfg:'~/.wazir/config.json', interacts:'Coordinates Planner, Model Router, Worker dispatch, and Verification Engine.' },
-      { id:'router', name:'Model Router', status:'Operational · 90%+ Local Target', purpose:'Capability-aware model selection across local MLX, Ollama, LM Studio, and authorized providers.', caps:'Local-first Qwen preference, hardware capability matching, backpressure & fallback', deps:'@wazir/models, @wazir/scheduler', src:'packages/models/, packages/core/src/services/scheduler.ts', install:'Included in Wazir Core', cfg:'fleetHosts & model preferences in ~/.wazir/config.json', interacts:'Selects optimal local or remote model endpoint for Agent Runtime.' },
+      { id:'core', name:'Wazir Core', status:'Operational · v0.4.1', purpose:'Shared Goal/Loop/Graph orchestration, 4-Tier FastOrchestrator, Liquid LFM2.5 tool router, policy enforcement, persistence, and verification engine.', caps:'FastOrchestrator, LiquidShellOrchestrator (wazir-shell-mini), WorkflowRuntimeService, lease fencing, PolicyEngine', deps:'Node.js >= 22.13, SQLite / Postgres', src:'packages/core/src/services/, packages/goals/src/workflow/, packages/policies/', install:'Included in @wazir/core, @wazir/goals & wa bundle', cfg:'~/.wazir/config.json', interacts:'Coordinates Planner, Model Router, Worker dispatch, and Verification Engine.' },
+      { id:'router', name:'Model Router', status:'Operational · 90%+ Local Target', purpose:'Capability-aware model selection across local MLX, Ollama, LM Studio, embedded Liquid LFM2.5, and authorized providers.', caps:'Local-first Qwen & Liquid LFM preference, stale warm-cache recovery, networkAllowed=false privacy fence, hardware capability matching', deps:'@wazir/models, @wazir/scheduler', src:'packages/models/, packages/core/src/services/scheduler.ts, apps/cli/src/fastLlm.ts', install:'Included in Wazir Core & CLI', cfg:'fleetHosts & model preferences in ~/.wazir/config.json', interacts:'Selects optimal local or remote model endpoint for FastOrchestrator & Agent Runtime.' },
       { id:'agent', name:'Agent Runtime', status:'Operational · Qwen Core + ACP', purpose:'Unified ReAct coding and execution agent with smart edit and context compression.', caps:'Parallel read-only tool scheduling, loop detection, proportional verification, ACP/MCP bridge', deps:'@wazir/agents, @wazir/tools', src:'packages/agents/src/qwenCore/, packages/agents/src/acp/', install:'Bundled in bin/wa.js', cfg:'wa exec "<task>"', interacts:'Executes sandboxed tools on assigned Worker Machines and reports evidence to Verification Engine.' },
       { id:'worker', name:'Worker Machines', status:'Operational · Multi-Host SSE', purpose:'Distributed execution services on local and remote macOS, Linux/DGX Spark, and Windows hosts.', caps:'SSE task streaming, heartbeats, hardware/model discovery, lease-fenced job claims', deps:'@wazir/workers, @wazir/worker', src:'apps/worker/src/, apps/api/src/', install:'wa workers start or systemd/launchd service', cfg:'WAZIR_REGISTRATION_TOKEN & API URL', interacts:'Claims lease-fenced tasks from Wazir Core and streams execution events back to Mission Control.' },
       { id:'mobile', name:'GrapheneOS Mobile', status:'Operational · Zero-Root APK + Termux', purpose:'GrapheneOS-compatible Android companion application and Termux ARM64 CLI integration.', caps:'Task input, fleet view, live execution progress, approval requests, QR/URI host pairing', deps:'Android SDK 35, Jetpack Compose, Termux nodejs-lts', src:'apps/android/, scripts/install-termux.sh', install:'Install wazir-mobile-0.4.1-android-debug.apk or run install-termux.sh', cfg:'Scoped device pairing URI / QR token', interacts:'Connects to authorized Wazir API over TLS/SSE for remote monitoring and approvals.' },
@@ -398,16 +398,16 @@ $ wa pause run-8a4f &amp;&amp; wa resume run-8a4f</pre>
     };
     renderTopology();
 
-    // Interactive 8-Step Onboarding (Section 8.6)
+    // Interactive 8-Step Onboarding & Training (Section 8.6)
     const STEPS = [
-      { n:1, title:'1. Install Wazir Shell', desc:'Download the verified package for macOS, Linux, or GrapheneOS and verify its SHA-256 checksum against SHA256SUMS.txt.', cmd:'shasum -a 256 -c SHA256SUMS.txt --ignore-missing' },
-      { n:2, title:'2. Review Terms & Diagnostics', desc:'Accept or decline minimal redacted diagnostics on first launch. Declining disables telemetry completely and never blocks your native OS shell.', cmd:'wa diagnostics notice' },
-      { n:3, title:'3. Configure Local Inference', desc:'Discover local Ollama (:11434), MLX (:8080), or LM Studio (:1234) endpoints serving Qwen models.', cmd:'wa doctor --detail' },
-      { n:4, title:'4. Register or Pair a Machine', desc:'Register authorized macOS/Linux workers with WAZIR_REGISTRATION_TOKEN or pair GrapheneOS via scoped URI/QR.', cmd:'wa fleet' },
-      { n:5, title:'5. Run First Native Command', desc:'Type ordinary shell commands (ls -la, git status, pipes) directly in your persistent native PTY—works 100% offline.', cmd:'wa shell -c "git status -sb"' },
-      { n:6, title:'6. Run Natural-Language Task', desc:'Enter an AI request or prefix with ? to trigger governed planning, policy checks, and local Qwen execution.', cmd:'wa shell -c "? find the startup bottleneck in Wazir"' },
-      { n:7, title:'7. Open Mission Control', desc:'Inspect registered machines, live CPU/GPU/memory telemetry, and the 10-state visual execution graph.', cmd:'open -a "Wazir Mission Control"' },
-      { n:8, title:'8. Review Verification Evidence', desc:'Confirm completion through real test/build verification receipts—never unverified LLM self-reporting.', cmd:'wa about --json' },
+      { n:1, title:'1. Install Wazir Shell', desc:'Download the verified package for macOS, Linux, Windows, or GrapheneOS and verify its SHA-256 checksum against SHA256SUMS.txt.', cmd:'shasum -a 256 -c SHA256SUMS.txt --ignore-missing && wa about' },
+      { n:2, title:'2. Review Terms & Diagnostics', desc:'Accept or decline minimal redacted diagnostics on first launch. Declining disables telemetry completely and never blocks your native OS shell.', cmd:'wa diagnostics notice && wa diagnostics status' },
+      { n:3, title:'3. Configure Local Inference', desc:'Discover local Ollama (:11434), MLX (:8080), LM Studio (:1234), or embedded wazir-shell-mini endpoints and verify sandbox health.', cmd:'wa doctor --detail && wa models list' },
+      { n:4, title:'4. Register or Pair a Machine', desc:'Register authorized macOS/Linux/Windows workers with WAZIR_REGISTRATION_TOKEN or pair GrapheneOS via scoped URI/QR.', cmd:'wa fleet' },
+      { n:5, title:'5. Run Instant Tier 0 & Native PTY Commands', desc:'Execute Tier 0 builtins (<5ms) or ordinary shell commands (ls, git status, pipes) directly in your persistent native PTY—100% offline.', cmd:'wa shell -c "version" && wa shell -c "git status -sb"' },
+      { n:6, title:'6. Run Natural-Language Task & Inspect Routing', desc:'Inspect 4-Tier FastOrchestrator routing with wa route or stream a governed local AI answer with latency telemetry.', cmd:'wa route "explain chmod 755" && wa shell -c "? explain chmod 755"' },
+      { n:7, title:'7. Train & Fine-Tune wazir-shell-mini', desc:'Generate the 18-tool ChatML SFT dataset and validate LoRA fine-tuning for LiquidAI/LFM2.5-350M offline shell tool routing.', cmd:'node scripts/generate-shell-training-dataset.mjs && python3 scripts/train-wazir-shell-mini.py --validate-only' },
+      { n:8, title:'8. Review Latency, Mission Control & Evidence', desc:'Inspect 13-metric FastOrchestrator latency percentiles, Mission Control execution graphs, and physical verification receipts.', cmd:'wa latency && wa benchmark run' },
     ];
     let activeStep = 1;
     function renderOnboarding() {

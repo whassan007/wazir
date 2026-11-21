@@ -82,12 +82,18 @@ for (const c of candidates) {
 fs.writeFileSync(path.join(DIST, 'SHA256SUMS.txt'), `${shaLines.join('\n')}\n`);
 fs.copyFileSync(path.join(DIST, 'SHA256SUMS.txt'), path.join(PORTAL, 'releases/SHA256SUMS.txt'));
 
+const modelManifestPath = path.join(ROOT, 'assets/models/wazir-shell-mini/manifest.json');
+const embeddedModelManifest = fs.existsSync(modelManifestPath)
+  ? JSON.parse(fs.readFileSync(modelManifestPath, 'utf8'))
+  : undefined;
+
 const manifest = {
   name: 'Wazir AI OS',
   version,
   releasedAt: new Date().toISOString(),
   repository: 'https://github.com/whassan007/wazir',
   checksumsUrl: '/releases/SHA256SUMS.txt',
+  ...(embeddedModelManifest ? { bundledModel: embeddedModelManifest } : {}),
   artifacts,
 };
 fs.writeFileSync(path.join(DIST, 'release-manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);

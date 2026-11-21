@@ -8,16 +8,17 @@
 
 Wazir AI OS is a cross-platform, AI-native execution environment and model-agnostic meta-harness. It unifies traditional operating-system commands and natural-language AI requests in one universal terminal (`Wazir Shell` / `wa shell`), schedules work across local runtimes (Ollama, MLX, LM Studio) and distributed workers (macOS, Linux / NVIDIA DGX Spark, Windows), monitors every job in **Wazir Mission Control**, and verifies results against physical evidence rather than model self-reports.
 
-- **Public Portal & Downloads:** [wazir-portal.pages.dev](https://wazir-portal.pages.dev) ([Download Page](https://wazir-portal.pages.dev/download)) · Target domain: `https://wazir.wael.bot`
+- **Public Portal & Downloads:** [wazir-portal.pages.dev](https://wazir-portal.pages.dev) ([Download Page](https://wazir-portal.pages.dev/download)) · Production domain: `https://wazir.wael.bot`
+- **Training & Operations Guide:** [Wazir AI OS Training, Operations & Fine-Tuning Guide (`v0.4.1`)](docs/training/WAZIR_TRAINING_GUIDE.md)
 - **Core Components:**
-  1. **Wazir Shell & CLI (`wazir`, `wa`)** (`apps/cli/`, `apps/shell/`, `wa shell`) — Native interactive terminal (`loop`, `graph`, `goal`, `jobs`, `status`, `inspect`, `pause`, `resume`, `stop`) combining deterministic OS shell compatibility (`!`, `\`, `os:`, pipes, redirections, `cd`), natural-language AI routing (`?`), and standalone `wa` CLI automation over one shared `@wazir/goals` workflow runtime.
+  1. **Wazir Shell & CLI (`wazir`, `wa`)** (`apps/cli/`, `apps/shell/`, `wa shell`) — Native interactive terminal with 4-tier `FastOrchestrator` (`Tier 0` `<5ms` deterministic builtins, `Tier 1` native PTY OS commands with persistent `cd`/`env`/`aliases` and descendant `SIGINT` termination, `Tier 2` sub-second local LLM streaming + optional embedded `wazir-shell-mini` 18-tool router, `Tier 3` full coding agent & `loop`/`graph`/`goal`/`jobs`/`status`/`inspect`/`pause`/`resume`/`stop` workflows) plus `wa route`, `wa latency`, and `wa debug`.
   2. **Loop, Graph & Goal Orchestration** (`packages/goals/src/workflow/`) — Bounded iterative Loop engine with collection discovery and crash recovery, acyclic DAG Graph compiler/controller with critical-path scheduling and branch isolation, and explainable automatic Goal compiler (`single` / `loop` / `graph` / `hybrid`).
-  2. **Wazir Mission Control** (`apps/desktop/`, `apps/web/public/mission-control.html`) — Graphical operations console with machine drill-down, 10-state execution graph, replay, and approvals inbox.
-  3. **Wazir Core** (`packages/core/`, `packages/agents/`, `packages/policies/`, `packages/scheduler/`, `packages/models/`) — Planning, policy enforcement, local-first Qwen routing, checkpoints, and `VerificationEngine`.
-  4. **Wazir Workers** (`apps/worker/`, `apps/api/`) — Distributed execution services with SSE task streams, heartbeats, and lease-fenced execution claims.
-  5. **Wazir Mobile** (`apps/android/`, `scripts/install-termux.sh`) — Zero-root GrapheneOS/Android Jetpack Compose companion (`ai.wazir.mobile`) and Termux ARM64 CLI integration.
-  6. **Wazir Diagnostics** (`packages/observability/`, `apps/api/src/diagnosticsRoutes.ts`) — Affirmative-consent, redacted diagnostic telemetry, crash fingerprinting, and bounded offline queue.
-  7. **Wazir Portal** (`apps/portal/`, `apps/api/src/publicRoutes.ts`) — Editorial product website, verified release manifest, and sanitized public demo topology.
+  3. **Wazir Mission Control** (`apps/desktop/`, `apps/web/public/mission-control.html`) — Graphical operations console with machine drill-down, 10-state execution graph, replay, and approvals inbox.
+  4. **Wazir Core** (`packages/core/`, `packages/agents/`, `packages/policies/`, `packages/scheduler/`, `packages/models/`) — Planning, policy enforcement, local-first Qwen / Liquid LFM / Gemma routing, checkpoints, and `VerificationEngine`.
+  5. **Wazir Workers** (`apps/worker/`, `apps/api/`) — Distributed execution services with SSE task streams, heartbeats, and lease-fenced execution claims.
+  6. **Wazir Mobile** (`apps/android/`, `scripts/install-termux.sh`) — Zero-root GrapheneOS/Android Jetpack Compose companion (`ai.wazir.mobile`) and Termux ARM64 CLI integration.
+  7. **Wazir Diagnostics** (`packages/observability/`, `apps/api/src/diagnosticsRoutes.ts`) — Affirmative-consent, redacted diagnostic telemetry, crash fingerprinting, and bounded offline queue.
+  8. **Wazir Portal** (`apps/portal/`, `apps/api/src/publicRoutes.ts`) — Editorial product website, verified release manifest, training resources, and sanitized public demo topology.
 
 ## Architecture
 
@@ -60,7 +61,11 @@ Wazir AI OS is a cross-platform, AI-native execution environment and model-agnos
 ### Execution
 - **Conversation-first terminal coding agent** (`wa` or `wazir`): running bare `wa` / `wazir` (or `wa "prompt"`, `wa chat`, `wa resume --last`, `wa exec "prompt"`) opens a calm, low-flicker coding conversation powered by `WazirQwenAgent` (native multi-tool ReAct loop with parallel `read_many_files`, 3-stage indentation-tolerant `edit`, atomic `multi_edit`, `todo_write`, 70% watermark context compaction, loop breaking, and proportional verification). Supports `/model`, `/permissions`, `/status`, `/diff`, `/init`, `/compact`, `/undo`, `/resume`, `/fleet`, `@file` fuzzy mentions, `!cmd` shell shortcuts, and explicit focus-gated approvals. `wa fleet` (or `wa chat --dashboard`) opens the full-screen **Mission Control** dashboard.
 - **Hardware-aware workload distribution**: `WorkloadDistributor` balances tasks across local hardware (`70%`), Antigravity (`15%`), Codex (`5%`), and auto overflow (`10%`) via deterministic Smooth Weighted Round-Robin (`--distribution`), while enforcing `LOCAL_ONLY` / sensitive data-classification boundaries (`FH-A8-02`).
-- **3-tier execution pipeline**: deterministic read-only commands (`ls`, `git status`, `git diff`, …) are answered without a model round-trip (Tier 0). Conversational prompts go to a lightweight `ChatAgent` (Tier 1), and everything else goes to the `WazirQwenAgent` coding loop (Tier 2, with `WAZIR_CODING_AGENT_LOOP=legacy` rollback safety). Questions that ask for a code change are guarded so they never take the conversational fast path.
+- **4-tier FastOrchestrator execution pipeline**:
+  - **Tier 0** answers instant deterministic queries (`what time is it`, `version`, `pwd`, `whoami`, `2 + 2`, `models`, `status`, `route`, `latency`, `debug`) in `<5ms` with zero model startup.
+  - **Tier 1** dispatches native OS commands, pipes, redirections, and `!cmd`/`\cmd`/`os:cmd` escapes directly to the persistent shell with interactive TTY handoff and descendant `SIGINT` process-tree cleanup.
+  - **Tier 2** streams fast local completions across discovered Ollama/LM Studio/MLX endpoints (with `<think>` filtering, warm cache recovery, and `WAZIR_LOCAL_ONLY` / `networkAllowed=false` strict privacy boundaries), plus optional embedded **`wazir-shell-mini`** (`LiquidAI/LFM2.5-350M-Q4_K_M.gguf`) 18-tool offline routing.
+  - **Tier 3** routes multi-file coding, verification, and `loop`/`graph`/`goal` workflows to `WazirQwenAgent` (with `WAZIR_CODING_AGENT_LOOP=legacy` rollback safety). Questions that ask for a code change are guarded so they never take the conversational fast path.
 - **Cross-harness execution**: one versioned execution contract covers the native Wazir agent, Agent Client Protocol (ACP) harnesses (Claude Code, Codex, Qwen Code via `qwen --acp`) and external CLI harnesses (OpenCode). Capabilities and binaries are discovered automatically. External harnesses never receive standing `always` tool approvals, only one-shot grants that the policy engine permits.
 - **Checkpoints and portable handoff**: `wa jobs checkpoint` / `fork` / `rollback` snapshot an execution and its workspace. `wa handoff create/export/resume` moves work between harnesses or machines through a content-addressed, digest-verified checkpoint format. Resuming can never escalate permissions or reset budgets that were already consumed.
 - **Governed solution search & synthesis** (`wa search run --compose`): runs $N$ independent candidate trajectories in parallel (`Propose → Probe → Compose`), contrasts behavioral trajectories, synthesizes complementary insights behind `GovernanceFence` (*evidence changes how the agent works, never what it may access*), and promotes winners only after physical re-verification (`UNVERIFIED_CONTRASTIVE` when no oracle ran).
@@ -183,6 +188,9 @@ wa run "explain what this repository does"
 | Command | What it does |
 | --- | --- |
 | `wa init` / `wa doctor` / `wa status` | Initialize the control plane, run a health check, show an operational snapshot |
+| `wa shell` / `wazir` | Interactive 4-Tier OS + Fast Local LLM + Agent Shell (`-c`, `--model`, `--permissions`, `--no-ai`, `--debug`) |
+| `wa route <expr>` / `wa latency` / `wa debug` | Inspect FastOrchestrator tier routing, 13-metric latency percentiles, and debug trace flags |
+| `wa loop` / `wa graph` / `wa goal run` | Execute bounded iterative Loops, acyclic DAG Graphs, or automatic hybrid Goal workflows |
 | `wa chat` | Conversation-first coding assistant (`--dashboard` for Mission Control) |
 | `wa fleet` | Full-screen Mission Control fleet dashboard |
 | `wa ask <prompt>` | One-shot question with automatic model/computer selection |
@@ -471,8 +479,10 @@ Wazir runs natively on Linux, macOS and Windows with no emulation layer.
 6. **Heterogeneous Fleet & DGX Spark**: Two-phase resource-aware scheduler routes workloads across macOS, Windows, and Linux ARM64 (NVIDIA DGX Spark GB10 with 122 GB ATS unified memory).
 7. **Durable Recovery & Lease Fencing**: WAL-backed dispatch with cryptographically fenced lease tokens (`LEASE_LOST`), orphan sweeps, and safe retries preventing duplicate mutating side effects.
 
-### Documentation & Guides
+### Documentation, Training & Guides
 
+- **[Wazir Training, Operations & Fine-Tuning Guide (`v0.4.1`)](docs/training/WAZIR_TRAINING_GUIDE.md)** — Complete 5-module curriculum covering installation, 4-tier shell mastery, `loop`/`graph`/`goal` workflows, fleet operations, and LoRA/GGUF fine-tuning of `wazir-shell-mini` (`LiquidAI/LFM2.5-350M`).
+- **Training Pipeline Scripts:** `node scripts/generate-shell-training-dataset.mjs` & `python3 scripts/train-wazir-shell-mini.py`
 - [Wazir AI OS Architecture](docs/architecture/wazir-ai-os.md)
 - [Wazir Shell Architecture](docs/architecture/shell-architecture.md)
 - [Wazir Mission Control](docs/architecture/mission-control.md)
@@ -526,4 +536,5 @@ Logo and full corporate visual identity guidelines (typography, color palette, v
 
 - **Existing Core, CLI, API, Desktop & Mobile:** Licensed under **AGPL-3.0-only** — see [LICENSE](./LICENSE). If you run a modified version of Wazir as a network service, the AGPL requires you to make your modified source available to users of that service.
 - **Selective Qwen Code Transplant:** Portions of `packages/agents/src/qwenCore/*` and `packages/tools/src/*` are selectively adapted from `QwenLM/qwen-code` (`Apache-2.0`).
+- **Optional Embedded Edge Model (`wazir-shell-mini`):** Derived from `LiquidAI/LFM2.5-350M-GGUF` under **LFM Open License v1.0** — see [assets/models/wazir-shell-mini/LICENSE-LFM-1.0.txt](./assets/models/wazir-shell-mini/LICENSE-LFM-1.0.txt) and [MODEL_CARD.md](./assets/models/wazir-shell-mini/MODEL_CARD.md).
 - **Commercial Authorization & Credits:** See [NOTICE](./NOTICE), [AUTHORS](./AUTHORS), [CONTRIBUTORS](./CONTRIBUTORS), [THIRD_PARTY_LICENSES.md](./THIRD_PARTY_LICENSES.md), [LICENSE-COMMERCIAL.md](./LICENSE-COMMERCIAL.md), and [docs/legal/licensing-audit.md](./docs/legal/licensing-audit.md).
