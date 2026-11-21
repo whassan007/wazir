@@ -139,8 +139,8 @@ async function runSingleQwenTurnAttempt(options: RunQwenTurnOptions): Promise<Qw
 
   const rawContent = content;
 
-  // Fallback for local Qwen servers emitting <tool_call> XML blocks in text content
-  if (toolCalls.length === 0 && !error && content.includes('<tool_call>')) {
+  // Fallback for local Qwen servers emitting <tool_call> or bare <function=...> XML blocks in text content
+  if (toolCalls.length === 0 && !error && content) {
     const xmlParsed = parseXmlToolCalls(content, turnIndex);
     if (xmlParsed.calls.length > 0) {
       for (const c of xmlParsed.calls) {

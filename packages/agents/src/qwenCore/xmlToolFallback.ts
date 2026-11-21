@@ -153,7 +153,8 @@ export interface ParsedXmlToolCall {
   input: Record<string, unknown>;
 }
 
-const TOOL_CALL_BLOCK_RE = /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/gi;
+const TOOL_CALL_BLOCK_RE =
+  /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>|<function\s*=\s*[A-Za-z0-9_.:-]+\s*>[\s\S]*?<\/function>(?:\s*<\/tool_call>)?/gi;
 const QWEN3_FN_RE = /<function\s*=\s*([A-Za-z0-9_.:-]+)\s*>([\s\S]*?)<\/function>/i;
 const QWEN3_PARAM_RE = /<parameter\s*=\s*([A-Za-z0-9_.-]+)\s*>([\s\S]*?)<\/parameter>/gi;
 
@@ -166,7 +167,7 @@ export function parseXmlToolCalls(content: string, turnIndex = 0): {
   calls: ParsedXmlToolCall[];
   strippedContent: string;
 } {
-  if (!content || !content.includes('<tool_call>')) {
+  if (!content || (!content.includes('<tool_call>') && !/<function\s*=\s*[A-Za-z0-9_.:-]+\s*>/i.test(content))) {
     return { calls: [], strippedContent: content };
   }
 
@@ -176,7 +177,7 @@ export function parseXmlToolCalls(content: string, turnIndex = 0): {
   let match: RegExpExecArray | null;
 
   while ((match = TOOL_CALL_BLOCK_RE.exec(content)) !== null) {
-    const inner = match[1].trim();
+    const inner = (match[1] ?? match[0]).trim();
     // Format A: Qwen2.5 JSON inside <tool_call>{"name": "...", "arguments": {...}}</tool_call>
     if (inner.startsWith('{')) {
       try {

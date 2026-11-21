@@ -1,0 +1,14 @@
+Wazir Shell v0.4.0 — Native OS + AI + Loop + Graph + Goal Shell
+Reserved: loop | graph | goal | jobs | status | inspect | pause | resume | stop | help
+Escapes:  '! <cmd>' / '\<cmd>' / 'os:<cmd>' for OS shell · '? <req>' for AI · '/mode <auto|shell|ai>'
+Detected tools: rg
+
+wazir:s07-Jubnsq$ ! python3 -c "import time; time.sleep(10)" # SLEEP_TAG_1795299050069
+^CTraceback (most recent call last):
+  File "<string>", line 1, in <module>
+    import time; time.sleep(10)
+                 ~~~~~~~~~~^^^^
+KeyboardInterrupt
+wazir:s07-Jubnsq$ ! echo AFTER_SIGINT_ALIVE
+AFTER_SIGINT_ALIVE
+wazir:s07-Jubnsq$ exit 0

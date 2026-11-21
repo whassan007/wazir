@@ -164,7 +164,7 @@ export class TaskPlanner {
       /\b((?<!(?:the|our|this|current|existing)\s+)build|write|create|implement|add|code\s+(?:up\b|a\b|an\b)|make(?!\s+(?:recommendations?\b|suggestions?\b|sense\b|sure\b|notes?\b))|generate|scaffold|refactor|modify|edit)\b/i.test(input);
     const isCheckOrInspect =
       isInlineResponseOnly ||
-      /\b(check|inspect|verify|test|read|examine|review|audit|analyze|analyse|summarize|summarise|describe|explain|list|calculate|compute|evaluate|solve|recommend|recommendations|what\s+is|how\s+many|reverse\b|does\b.*work)\b/i.test(input);
+      /\b(check|inspect|verify|test|read|examine|review|audit|analyze|analyse|summarize|summarise|describe|explain|list|calculate|compute|evaluate|solve|recommend|recommendations|identify|find|locate|search|show|tell\s+me|what\b|which\b|where\b|who\b|why\b|how\b|reverse\b|does\b.*work)\b/i.test(input);
     const isFix = !isInlineResponseOnly && /\b(fix|patch|repair|resolve|update)\b/i.test(input);
 
     const mutationRequired = isBuildOrWrite || isFix || (!isCheckOrInspect);

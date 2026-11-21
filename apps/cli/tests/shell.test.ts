@@ -10,6 +10,7 @@ import {
 } from '@wazir/core';
 import { MemoryStore } from '@wazir/shared';
 import {
+  attachShellPermissionPolicy,
   createInitialShellState,
   executeShellLine,
 } from '../src/commands/shellCommand.js';
@@ -335,5 +336,38 @@ describe('Wazir Shell v0.3.2 — Integration & Verification Suite', () => {
 
     expect(classifyShellInput('help me find the bug').mode).toBe('ai');
     expect(classifyShellInput('inspect this repository').mode).toBe('ai');
+  });
+
+  it('14. blocks AI mutations under /permissions read-only and denies unapproved mutations under /permissions ask', async () => {
+    const state = createInitialShellState({ initialCwd: tmpWorkspace, permissionMode: 'auto' });
+    let approveDecision = false;
+    const policy = new PolicyEngine({ projectRoot: tmpWorkspace });
+    attachShellPermissionPolicy(policy, () => state.permissionMode, {
+      confirmToolApproval: async () => approveDecision,
+    });
+
+    await executeShellLine('/permissions read-only', state);
+    expect(state.permissionMode).toBe('read-only');
+
+    expect((await policy.authorize({ tool: 'read', input: { path: 'a.ts' }, projectRoot: tmpWorkspace })).decision).toBe('allow');
+    expect((await policy.authorize({ tool: 'git', input: { args: ['status'] }, projectRoot: tmpWorkspace })).decision).toBe('allow');
+    expect((await policy.authorize({ tool: 'git', input: { args: ['commit', '-m', 'x'] }, projectRoot: tmpWorkspace })).decision).toBe('deny');
+    expect((await policy.authorize({ tool: 'write', input: { path: 'a.ts', content: 'x' }, projectRoot: tmpWorkspace })).decision).toBe('deny');
+    expect((await policy.authorize({ tool: 'edit', input: { path: 'a.ts' }, projectRoot: tmpWorkspace })).decision).toBe('deny');
+    expect((await policy.authorize({ tool: 'shell', input: { command: 'ls' }, projectRoot: tmpWorkspace })).decision).toBe('deny');
+
+    await executeShellLine('/permissions ask', state);
+    expect(state.permissionMode).toBe('ask');
+    expect((await policy.authorize({ tool: 'write', input: { path: 'a.ts', content: 'x' }, projectRoot: tmpWorkspace })).decision).toBe('deny');
+
+    approveDecision = true;
+    expect((await policy.authorize({ tool: 'write', input: { path: 'a.ts', content: 'x' }, projectRoot: tmpWorkspace })).decision).toBe('allow');
+
+    await executeShellLine('/permissions auto', state);
+    expect(state.permissionMode).toBe('auto');
+    expect((await policy.authorize({ tool: 'shell', input: { command: 'npm test' }, projectRoot: tmpWorkspace })).decision).toBe('allow');
+    expect((await policy.authorize({ tool: 'shell', input: { command: `cd "${tmpWorkspace}" && node --experimental-strip-types --test foo.test.ts` }, projectRoot: tmpWorkspace })).decision).toBe('allow');
+    expect((await policy.authorize({ tool: 'shell', input: { command: 'cd /tmp && npm test' }, projectRoot: tmpWorkspace })).decision).toBe('deny');
+    expect((await policy.authorize({ tool: 'shell', input: { command: 'npm test; rm -rf /' }, projectRoot: tmpWorkspace })).decision).toBe('deny');
   });
 });

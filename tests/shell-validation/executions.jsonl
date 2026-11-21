@@ -1,0 +1,6 @@
+{"testId":"A01","model":"qwen3-coder:30b","executionId":"exec-mwqypf33-1","durationMs":24106,"success":true}
+{"testId":"A02","model":"qwen3-coder:30b","executionId":"exec-mwqypxpr-1","durationMs":61565,"success":true}
+{"testId":"A03","model":"qwen3-coder:30b","executionId":"exec-mwqyr9fx-1","durationMs":71262,"success":true}
+{"testId":"A04","model":"qwen3-coder:30b","executionId":"exec-mwqyssl8-1","durationMs":29489,"success":true}
+{"testId":"A05-1","model":"qwen3-coder:30b","provenance":"[wazir-ai] model=qwen3-coder:30b runtime=dgx_spark:ollama computer=dgx_spark executionId=exec-mwqytfgh-1 success=true","durationMs":13210,"success":true}
+{"testId":"A05-2","model":"gemma4:26b","provenance":"[wazir-ai] model=gemma4:26b runtime=dgx_spark:ollama computer=dgx_spark executionId=exec-mwqytps9-1 success=true","durationMs":22310,"success":true}

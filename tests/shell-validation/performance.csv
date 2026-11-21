@@ -1,0 +1,9 @@
+Metric,Median,P95,Max,Samples
+"cold_startup_shell_no_ai_ms","292","300","300","[290,292,300]"
+"warm_native_command_ms","3","5","5","[3,3,3,3,5]"
+"shell_ai_first_stdout_ms","282","282","282","[282]"
+"shell_ai_cold_end_to_end_ms","13124","13124","13124","[13124]"
+"wa_exec_comparison_ms","11469","11469","11469","[11469]"
+"interactive_shell_rss_mb","155.8","155.8","155.8","[155.8]"
+"interactive_shell_idle_cpu_pct","36","36","36","[36]"
+"sigint_cancellation_latency_ms","27","29","29","[26,27,29]"

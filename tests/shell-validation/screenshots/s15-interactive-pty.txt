@@ -1,0 +1,9 @@
+Wazir Shell v0.4.0 — Native OS + AI + Loop + Graph + Goal Shell
+Reserved: loop | graph | goal | jobs | status | inspect | pause | resume | stop | help
+Escapes:  '! <cmd>' / '\<cmd>' / 'os:<cmd>' for OS shell · '? <req>' for AI · '/mode <auto|shell|ai>'
+Detected tools: rg
+
+wazir:s15-9zJ8eN$ ! node ask.cjs
+ENTER_NAME:WAZIR_USER
+GREET:WAZIR_USER
+wazir:s15-9zJ8eN$ exit 0

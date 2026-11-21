@@ -21,6 +21,7 @@ describe('ISS-006: Fast-path classification and expected-file/mutation guardrail
     expect(isConversationalFastPathRequest('What is causing the crash? Modify the controller to handle null')).toBe(false);
     expect(isConversationalFastPathRequest('Could you add a validation check to the middleware?')).toBe(false);
     expect(isConversationalFastPathRequest('Fix the authentication bug?')).toBe(false);
+    expect(isConversationalFastPathRequest('What operating system am I running?')).toBe(false);
   });
 
   it('returns false when expectedFiles or mutationRequired is set, even when type is chat', () => {

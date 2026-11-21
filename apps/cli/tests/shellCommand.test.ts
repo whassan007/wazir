@@ -3,7 +3,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { WAZIR_SHELL_COMMANDS, classifyShellInput } from '@wazir/core';
-import { createInitialShellState, executeShellLine } from '../src/commands/shellCommand.js';
+import {
+  completeShellInput,
+  createInitialShellState,
+  createShellAiHandler,
+  executeShellLine,
+  expandShellEnv,
+} from '../src/commands/shellCommand.js';
 
 describe('Wazir universal shell session', () => {
   let tmpDir: string;
@@ -136,4 +142,90 @@ describe('Wazir universal shell session', () => {
       else process.env.WAZIR_WORKSPACE_DIR = prevWs;
     }
   });
+
+  it('expands $VAR and ${VAR} inside cd and export builtins and handles /model and /permissions controls (DEF-005)', async () => {
+    const subDir = path.join(tmpDir, 'nested-env-dir');
+    fs.mkdirSync(subDir, { recursive: true });
+    const state = createInitialShellState(tmpDir);
+
+    expect(expandShellEnv('"$TARGET/sub"', { TARGET: '/tmp/wazir' })).toBe('/tmp/wazir/sub');
+    expect(expandShellEnv("'${TARGET}'", { TARGET: '/tmp/wazir' })).toBe('${TARGET}');
+
+    expect(await executeShellLine(`export SHELL_TARGET="${subDir}"`, state)).toBe(0);
+    expect(await executeShellLine('export DERIVED="$SHELL_TARGET/child"', state)).toBe(0);
+    expect(state.env.DERIVED).toBe(`${subDir}/child`);
+
+    expect(await executeShellLine('cd "$SHELL_TARGET"', state)).toBe(0);
+    expect(fs.realpathSync(state.cwd)).toBe(fs.realpathSync(subDir));
+
+    expect(await executeShellLine('/model test-model-1', state)).toBe(0);
+    expect(state.model).toBe('test-model-1');
+    expect(await executeShellLine('/model auto', state)).toBe(0);
+    expect(state.model).toBeUndefined();
+    expect(await executeShellLine('/permissions read-only', state)).toBe(0);
+    expect(state.permissionMode).toBe('read-only');
+    expect(await executeShellLine('/permissions ask', state)).toBe(0);
+    expect(state.permissionMode).toBe('ask');
+  });
+
+  it('completes builtins and filesystem paths relative to cwd (DEF-004)', () => {
+    const subDir = path.join(tmpDir, 'alpha-dir');
+    fs.mkdirSync(subDir, { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, 'alpha-file.ts'), 'export const a = 1;\n');
+    const state = createInitialShellState(tmpDir);
+
+    const [cmdMatches, cmdSub] = completeShellInput('hel', state);
+    expect(cmdSub).toBe('hel');
+    expect(cmdMatches).toContain('help');
+
+    const [permMatches] = completeShellInput('/permissions r', state);
+    expect(permMatches).toContain('/permissions read-only');
+
+    const [pathMatches, pathSub] = completeShellInput('cd alpha-', state);
+    expect(pathSub).toBe('alpha-');
+    expect(pathMatches).toContain('alpha-dir/');
+    expect(pathMatches).toContain('alpha-file.ts');
+  });
+
+  it('aborts child process trees cleanly on AbortSignal without leaving orphans (DEF-003)', async () => {
+    const state = createInitialShellState(tmpDir);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 150);
+    const startedAt = Date.now();
+    const code = await executeShellLine('! sleep 10', state, undefined, { signal: controller.signal });
+    clearTimeout(timer);
+    expect(code).not.toBe(0);
+    expect(Date.now() - startedAt).toBeLessThan(4000);
+  });
+
+  it('fails explicitly in createShellAiHandler when an isolated WAZIR_HOME has no reachable providers (A07)', async () => {
+    const isolatedHome = path.join(tmpDir, 'isolated-home');
+    fs.mkdirSync(isolatedHome, { recursive: true });
+    const state = createInitialShellState({
+      initialCwd: tmpDir,
+      env: {
+        ...process.env,
+        WAZIR_HOME: isolatedHome,
+        WAZIR_SKIP_RUNTIME_DISCOVERY: '1',
+        NVIDIA_API_KEY: '',
+        NVAPI_KEY: '',
+      },
+    });
+    const handler = createShellAiHandler({ interactive: false, fastStartup: true, skipRuntimeDiscovery: true });
+    // Clear inherited env keys inside isolated test scope only if present
+    const prevNvidia = process.env.NVIDIA_API_KEY;
+    const prevNvapi = process.env.NVAPI_KEY;
+    delete process.env.NVIDIA_API_KEY;
+    delete process.env.NVAPI_KEY;
+    try {
+      const code = await executeShellLine('? summarize this directory', state, handler);
+      expect(code).toBe(1);
+      expect(state.lastAiOutcome?.success).toBe(false);
+      // Native commands continue operating cleanly after AI provider failure
+      expect(await executeShellLine('! echo NATIVE_STILL_OK', state)).toBe(0);
+    } finally {
+      if (prevNvidia !== undefined) process.env.NVIDIA_API_KEY = prevNvidia;
+      if (prevNvapi !== undefined) process.env.NVAPI_KEY = prevNvapi;
+    }
+  }, 15_000);
 });

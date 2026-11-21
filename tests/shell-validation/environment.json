@@ -1,0 +1,55 @@
+{
+  "capturedAt": "2026-11-21T20:31:00Z",
+  "baselineCommit": "a96507f5ca5fa16e2a181188661eddc18bba01b0",
+  "branch": "feat/wazir-shell-e2e-repair",
+  "wazirVersion": "0.4.0",
+  "macos": {
+    "hostname": "WaelMacPro.local",
+    "os": "macOS 27.0.1 (Build 26A434)",
+    "kernel": "Darwin 27.0.0 arm64",
+    "node": "v22.23.3",
+    "shell": "/bin/zsh",
+    "localRuntimes": ["lmstudio", "mlx", "ollama"],
+    "sandboxBackend": "sandbox-exec"
+  },
+  "fleetNodes": [
+    {
+      "id": "local",
+      "name": "WaelMacPro.local",
+      "memoryGiB": 24,
+      "freeGiBAtBaseline": 0.1,
+      "runtimes": ["lmstudio", "mlx", "ollama"],
+      "modelsCount": 11
+    },
+    {
+      "id": "mac_studio",
+      "name": "Mac Studio (Apple M4 Max)",
+      "memoryGiB": 36,
+      "freeGiBAtBaseline": 36.0,
+      "runtimes": ["mac_studio:lmstudio", "mac_studio:ollama"],
+      "readyLoadedModel": "qwen/qwen3-30b-a3b"
+    },
+    {
+      "id": "dgx_spark",
+      "name": "NVIDIA DGX Spark (GB10, waelbot)",
+      "arch": "aarch64",
+      "os": "Ubuntu Linux 24.04",
+      "memoryGiB": 128,
+      "freeGiBAtBaseline": 128.0,
+      "runtimes": ["dgx_spark:ollama"],
+      "installedModels": ["gemma4:26b", "qwen3-coder:30b", "qwen3.6:35b-a3b-q8_0", "qwen3.8:27b", "muse-glimmer:latest"]
+    },
+    {
+      "id": "hosted",
+      "name": "NVIDIA API Catalog",
+      "authStatus": "connected (api-key)",
+      "modelsCount": 35
+    }
+  ],
+  "optionalCapabilities": {
+    "secrets": "os-keychain (@napi-rs/keyring)",
+    "pty": "node-pty (native)",
+    "rg": "installed",
+    "qwenAcp": "available"
+  }
+}

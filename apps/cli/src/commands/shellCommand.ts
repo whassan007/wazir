@@ -2,12 +2,17 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import type { Command } from 'commander';
 import {
+  MUTATION_TOOLS,
+  WAZIR_SHELL_COMMANDS,
   classifyShellInput,
   discoverOptionalShellTools,
+  isPathInside,
+  terminateProcessTree,
   type OptionalShellToolStatus,
+  type ShellPermissionMode,
   type ShellRoutingMode,
 } from '@wazir/core';
 import {
@@ -21,6 +26,17 @@ import {
 } from '@wazir/observability';
 import { resolveAuthoritativePackageVersion } from '../version.js';
 
+export interface ShellAiOutcomeSummary {
+  success: boolean;
+  executionId?: string;
+  modelId?: string;
+  runtimeId?: string;
+  computerId?: string;
+  result?: string;
+  errors?: string[];
+  reasons?: string[];
+}
+
 export interface ShellSessionState {
   cwd: string;
   previousCwd: string;
@@ -30,9 +46,13 @@ export interface ShellSessionState {
   historyFile?: string;
   lastExitCode: number;
   routingMode: ShellRoutingMode;
+  model?: string;
+  permissionMode: ShellPermissionMode;
   optionalTools: OptionalShellToolStatus[];
   activeChild?: ChildProcess;
   shouldExit?: boolean;
+  lastRunId?: string;
+  lastAiOutcome?: ShellAiOutcomeSummary;
 }
 
 export interface CreateShellStateOptions {
@@ -40,6 +60,8 @@ export interface CreateShellStateOptions {
   env?: Record<string, string>;
   historyFile?: string;
   routingMode?: ShellRoutingMode;
+  model?: string;
+  permissionMode?: ShellPermissionMode;
 }
 
 export function createInitialShellState(
@@ -79,6 +101,8 @@ export function createInitialShellState(
     historyFile: opts.historyFile,
     lastExitCode: 0,
     routingMode: opts.routingMode ?? 'auto',
+    model: opts.model,
+    permissionMode: opts.permissionMode ?? 'auto',
     optionalTools: discoverOptionalShellTools(env.PATH),
   };
 }
@@ -100,6 +124,82 @@ function unquoteShellArg(raw: string): string {
   return trimmed.replace(/\\ /g, ' ');
 }
 
+/** Expands $VAR and ${VAR} references against session env unless wrapped in literal single quotes. */
+export function expandShellEnv(raw: string, env: Record<string, string>): string {
+  const trimmed = raw.trim();
+  if (trimmed.startsWith("'") && trimmed.endsWith("'") && trimmed.length >= 2) {
+    return trimmed.slice(1, -1);
+  }
+  const unquoted = unquoteShellArg(trimmed);
+  return unquoted.replace(
+    /\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g,
+    (_m, braced: string | undefined, bare: string | undefined) => {
+      const name = braced ?? bare ?? '';
+      return Object.prototype.hasOwnProperty.call(env, name) ? env[name]! : '';
+    },
+  );
+}
+
+/** Completes Wazir commands, shell builtins, control directives, aliases, and relative/absolute filesystem paths. */
+export function completeShellInput(
+  line: string,
+  state: Pick<ShellSessionState, 'cwd' | 'aliases' | 'env'>,
+): [string[], string] {
+  const builtins = [
+    ...Array.from(WAZIR_SHELL_COMMANDS).map((cmd) =>
+      ['loop', 'graph', 'goal', 'inspect', 'pause', 'resume', 'stop'].includes(cmd) ? `${cmd} ` : cmd,
+    ),
+    'cd ', 'pwd', 'export ', 'unset ', 'alias ', 'unalias ', 'tools', 'exit', 'quit',
+    '/mode auto', '/mode shell', '/mode ai',
+    '/model ', '/permissions ask', '/permissions auto', '/permissions read-only',
+    ...Object.keys(state.aliases),
+  ];
+
+  const hasSpace = /\s/.test(line);
+  const lastSpaceIdx = line.search(/\S+$/);
+  const currentToken = lastSpaceIdx >= 0 ? line.slice(lastSpaceIdx) : '';
+
+  if (!hasSpace && !currentToken.startsWith('/') && !currentToken.startsWith('./') && !currentToken.startsWith('../') && !currentToken.startsWith('~/')) {
+    const unique = Array.from(new Set(builtins));
+    const hits = unique.filter((c) => c.startsWith(line));
+    return [hits.length ? hits : unique, line];
+  }
+
+  if (line.startsWith('/')) {
+    const controlCmds = builtins.filter((b) => b.startsWith('/'));
+    const hits = controlCmds.filter((c) => c.startsWith(line));
+    if (hits.length > 0 || !hasSpace) {
+      return [hits.length ? hits : controlCmds, line];
+    }
+  }
+
+  // Complete paths relative to session cwd for arguments or explicit path prefixes.
+  const token = currentToken;
+  const slashIdx = token.lastIndexOf('/');
+  const dirPart = slashIdx >= 0 ? token.slice(0, slashIdx + 1) : '';
+  const namePrefix = slashIdx >= 0 ? token.slice(slashIdx + 1) : token;
+  const homeDir = state.env.HOME || os.homedir();
+  const expandedDir = dirPart ? expandTilde(dirPart, homeDir) : '.';
+  const searchDir = path.resolve(state.cwd, expandedDir);
+
+  try {
+    const entries = fs.readdirSync(searchDir, { withFileTypes: true });
+    const matches = entries
+      .filter((entry) => entry.name.startsWith(namePrefix))
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((entry) => `${dirPart}${entry.name}${entry.isDirectory() ? '/' : ''}`);
+    return [matches, token];
+  } catch {
+    return [[], token];
+  }
+}
+
+export type ShellAiHandler = (
+  request: string,
+  state: ShellSessionState,
+  signal?: AbortSignal,
+) => Promise<number>;
+
 export interface ExecuteShellLineOptions {
   confirmDestructiveAi?: (request: string, state: ShellSessionState) => Promise<boolean>;
   signal?: AbortSignal;
@@ -109,7 +209,7 @@ export interface ExecuteShellLineOptions {
 export async function executeShellLine(
   line: string,
   state: ShellSessionState,
-  onAiRequest?: (request: string, state: ShellSessionState) => Promise<number>,
+  onAiRequest?: ShellAiHandler,
   options: ExecuteShellLineOptions = {},
 ): Promise<number> {
   const trimmed = line.trim();
@@ -138,6 +238,21 @@ export async function executeShellLine(
     if (classified.modeChange) {
       state.routingMode = classified.modeChange;
       console.log(`[wazir-shell] Routing mode set to: ${state.routingMode}`);
+    }
+    if (classified.modelChange !== undefined) {
+      if (!classified.modelChange) {
+        console.log(`[wazir-shell] Current model: ${state.model ?? 'auto (scheduler)'}`);
+      } else if (classified.modelChange.toLowerCase() === 'auto') {
+        state.model = undefined;
+        console.log('[wazir-shell] Model reset to: auto (scheduler)');
+      } else {
+        state.model = classified.modelChange;
+        console.log(`[wazir-shell] Model pinned to: ${state.model}`);
+      }
+    }
+    if (classified.permissionChange) {
+      state.permissionMode = classified.permissionChange;
+      console.log(`[wazir-shell] Permission mode set to: ${state.permissionMode}`);
     }
     state.lastExitCode = 0;
     return 0;
@@ -177,7 +292,7 @@ export async function executeShellLine(
         return 130;
       }
     }
-    const code = await onAiRequest(classified.command, state);
+    const code = await onAiRequest(classified.command, state, options.signal);
     state.lastExitCode = code;
     return code;
   }
@@ -217,14 +332,14 @@ export async function executeShellLine(
   // Only handle bare `cd` in-process; chained commands like `cd dir && ls` run in child subshell
   if ((cmd === 'cd' || cmd.startsWith('cd ')) && !/[|><;&`]|\$\(|&&|\|\|/.test(cmd)) {
     const rawArg = cmd.slice(2).trim();
-    const unquoted = rawArg ? unquoteShellArg(rawArg) : '~';
+    const expandedArg = rawArg ? expandShellEnv(rawArg, state.env) : '~';
     const homeDir = state.env.HOME || os.homedir();
     const targetPath =
-      unquoted === '-'
+      expandedArg === '-'
         ? state.previousCwd
-        : path.resolve(state.cwd, expandTilde(unquoted, homeDir));
+        : path.resolve(state.cwd, expandTilde(expandedArg || '~', homeDir));
     if (!fs.existsSync(targetPath) || !fs.statSync(targetPath).isDirectory()) {
-      console.error(`cd: no such directory: ${rawArg || '~'}`);
+      console.error(`cd: no such directory: ${expandedArg || rawArg || '~'}`);
       state.lastExitCode = 1;
       return 1;
     }
@@ -241,7 +356,7 @@ export async function executeShellLine(
     const eq = rest.indexOf('=');
     if (eq > 0) {
       const k = rest.slice(0, eq).trim();
-      const v = unquoteShellArg(rest.slice(eq + 1));
+      const v = expandShellEnv(rest.slice(eq + 1), state.env);
       state.env[k] = v;
       if (k === 'PATH') {
         state.optionalTools = discoverOptionalShellTools(v);
@@ -289,7 +404,7 @@ export async function executeShellLine(
   if (/^[A-Za-z_][A-Za-z0-9_]*=[^|><;&`]*$/.test(cmd) && !/\s/.test(cmd)) {
     const eq = cmd.indexOf('=');
     const k = cmd.slice(0, eq).trim();
-    const v = unquoteShellArg(cmd.slice(eq + 1));
+    const v = expandShellEnv(cmd.slice(eq + 1), state.env);
     state.env[k] = v;
     state.lastExitCode = 0;
     return 0;
@@ -314,10 +429,19 @@ export async function executeShellLine(
       stdio: 'inherit',
     });
     state.activeChild = child;
+    let escalationTimer: ReturnType<typeof setTimeout> | undefined;
 
     const onAbort = () => {
       if (child.exitCode === null && child.signalCode === null) {
-        child.kill('SIGINT');
+        terminateChildProcessTree(child, 'SIGINT');
+        if (!escalationTimer) {
+          escalationTimer = setTimeout(() => {
+            if (child.exitCode === null && child.signalCode === null) {
+              void terminateProcessTree(child, { graceMs: 300 });
+            }
+          }, 400);
+          escalationTimer.unref?.();
+        }
       }
     };
     if (options.signal) {
@@ -329,6 +453,10 @@ export async function executeShellLine(
     }
 
     child.on('exit', (code, signal) => {
+      if (escalationTimer) {
+        clearTimeout(escalationTimer);
+        escalationTimer = undefined;
+      }
       if (options.signal) {
         options.signal.removeEventListener('abort', onAbort);
       }
@@ -345,6 +473,10 @@ export async function executeShellLine(
       resolve(exitCode);
     });
     child.on('error', (err) => {
+      if (escalationTimer) {
+        clearTimeout(escalationTimer);
+        escalationTimer = undefined;
+      }
       if (options.signal) {
         options.signal.removeEventListener('abort', onAbort);
       }
@@ -354,6 +486,59 @@ export async function executeShellLine(
       resolve(127);
     });
   });
+}
+
+function collectDescendantPids(rootPid: number): number[] {
+  if (process.platform === 'win32') return [];
+  const visited = new Set<number>([rootPid]);
+  const queue: Array<{ pid: number; depth: number }> = [{ pid: rootPid, depth: 0 }];
+  const ordered: number[] = [];
+
+  while (queue.length > 0 && ordered.length < 64) {
+    const current = queue.shift()!;
+    if (current.depth >= 5) continue;
+    try {
+      const out = execFileSync('pgrep', ['-P', String(current.pid)], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      for (const line of out.split(/\s+/)) {
+        const childPid = Number.parseInt(line.trim(), 10);
+        if (Number.isInteger(childPid) && childPid > 0 && !visited.has(childPid)) {
+          visited.add(childPid);
+          ordered.push(childPid);
+          queue.push({ pid: childPid, depth: current.depth + 1 });
+        }
+      }
+    } catch {
+      // pgrep exits non-zero when process has no children
+    }
+  }
+
+  return ordered.reverse();
+}
+
+/** Propagates termination signals across descendant child processes before signaling the shell process. */
+export function terminateChildProcessTree(
+  child: ChildProcess | undefined,
+  signal: NodeJS.Signals = 'SIGINT',
+): void {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return;
+  const pid = child.pid;
+  if (pid && process.platform !== 'win32') {
+    for (const descPid of collectDescendantPids(pid)) {
+      try {
+        process.kill(descPid, signal);
+      } catch {
+        // already exited
+      }
+    }
+  }
+  try {
+    child.kill(signal);
+  } catch {
+    // already exited
+  }
 }
 
 function stripOuterQuotes(value: string): string {
@@ -386,6 +571,8 @@ function shellHelpText(): string {
     '  !<cmd>, \\<cmd>, os:<cmd>, sh:<cmd>   Force OS shell execution (bypass Wazir commands)',
     '  ?<prompt>                             Force AI execution',
     '  /mode auto | shell | ai               Switch session routing mode',
+    '  /model <id|auto>                      Pin or inspect AI model for this shell session',
+    '  /permissions ask | auto | read-only   Set AI tool permission policy for this session',
   ].join('\n');
 }
 
@@ -407,7 +594,7 @@ export async function executeWazirShellCommand(
     budget: parsed.budget,
     duration: parsed.duration,
     repairs: parsed.repairs,
-    model: parsed.model,
+    model: parsed.model ?? state.model,
     computer: parsed.computer,
     items: parsed.items,
     until: parsed.until,
@@ -612,19 +799,314 @@ export async function executeWazirShellCommand(
   }
 }
 
+export interface CreateShellAiHandlerOptions {
+  confirmToolApproval?: (request: { tool: string; input: unknown; reason: string }) => Promise<boolean>;
+  interactive?: boolean;
+  version?: string;
+  fastStartup?: boolean;
+  skipRuntimeDiscovery?: boolean;
+}
+
+const READ_ONLY_GIT_SUBCOMMANDS = new Set([
+  'status',
+  'log',
+  'diff',
+  'show',
+  'branch',
+  'rev-parse',
+  'describe',
+  'ls-files',
+]);
+
+function isMutatingToolRequest(tool: string, input: unknown): boolean {
+  if (MUTATION_TOOLS.has(tool) || tool === 'shell' || tool === 'terminal_open' || tool === 'terminal_send') {
+    return true;
+  }
+  if (tool === 'git') {
+    const rec = (typeof input === 'object' && input !== null ? input : {}) as Record<string, unknown>;
+    const rawArgs = rec.args;
+    const sub = Array.isArray(rawArgs)
+      ? String(rawArgs[0] ?? '').trim().toLowerCase()
+      : String(rec.subcommand ?? rec.command ?? rawArgs ?? '')
+          .trim()
+          .split(/\s+/)[0]
+          ?.toLowerCase() ?? '';
+    return sub ? !READ_ONLY_GIT_SUBCOMMANDS.has(sub) : true;
+  }
+  return false;
+}
+
+const SAFE_AUTO_TEST_COMMAND_RE =
+  /^(?:npm\s+(?:test|run\s+(?:test|build|lint|typecheck))(?:\s+--[A-Za-z0-9_-]+)*|node\s+(?:--experimental-strip-types\s+)?(?:--import\s+[A-Za-z0-9_./-]+\s+)?--test(?:\s+[A-Za-z0-9_./-]+)*|npx\s+(?:vitest\s+run|tsc\s+--noEmit)(?:\s+[A-Za-z0-9_./-]+)*)$/;
+
+function stripProjectRootCdPrefix(cmd: string, projectRoot?: string): string {
+  if (!projectRoot) return cmd;
+  const match = /^cd\s+("[^"]+"|'[^']+'|\S+)\s*&&\s*(.+)$/.exec(cmd);
+  if (!match) return cmd;
+  const targetDir = unquoteShellArg(match[1]!);
+  try {
+    const resolvedTarget = fs.realpathSync(path.resolve(projectRoot, targetDir));
+    const resolvedRoot = fs.realpathSync(projectRoot);
+    if (resolvedTarget === resolvedRoot || isPathInside(resolvedRoot, resolvedTarget)) {
+      return match[2]!.trim();
+    }
+  } catch {
+    // ignore unresolvable path
+  }
+  return cmd;
+}
+
+/** Wraps a PolicyEngine instance so Wazir Shell's /permissions modes govern AI tool calls safely. */
+export function attachShellPermissionPolicy(
+  policy: import('@wazir/core').PolicyEngine,
+  getPermissionMode: () => ShellPermissionMode,
+  options: Pick<CreateShellAiHandlerOptions, 'confirmToolApproval' | 'interactive'> = {},
+): void {
+  const baseAuthorize = policy.authorize.bind(policy);
+  policy.authorize = async (policyReq) => {
+    const activePerm = getPermissionMode();
+    if (activePerm === 'read-only' && isMutatingToolRequest(policyReq.tool, policyReq.input)) {
+      const classified = policy.classify(policyReq);
+      if (classified.decision === 'deny') {
+        return classified;
+      }
+      return {
+        ...classified,
+        decision: 'deny',
+        rule: 'shell-read-only-policy-deny',
+        reasons: [
+          ...classified.reasons,
+          `shell permission mode 'read-only' forbids mutating tool '${policyReq.tool}'`,
+        ],
+      };
+    }
+    if (activePerm === 'ask' && isMutatingToolRequest(policyReq.tool, policyReq.input)) {
+      const classified = policy.classify(policyReq);
+      if (classified.decision === 'deny') {
+        return classified;
+      }
+      const reason = `shell permission mode 'ask' requires approval for tool '${policyReq.tool}'`;
+      let approved = false;
+      if (options.confirmToolApproval) {
+        approved = await options.confirmToolApproval({
+          tool: policyReq.tool,
+          input: policyReq.input,
+          reason,
+        });
+      } else if (options.interactive && process.stdin.isTTY) {
+        const { createApprover } = await import('../approve.js');
+        const ans = await createApprover(policyReq, {
+          ...classified,
+          decision: 'ask',
+          rule: 'shell-ask-mode',
+          reasons: [reason],
+        });
+        approved = ans === true;
+      }
+      if (!approved) {
+        return {
+          ...classified,
+          decision: 'deny',
+          rule: 'shell-ask-mode-denied',
+          reasons: [...classified.reasons, `${reason}; denied`],
+        };
+      }
+      return {
+        ...classified,
+        decision: 'allow',
+        rule: 'shell-ask-mode+user-approved',
+        reasons: [...classified.reasons, 'approved by user in shell ask mode'],
+      };
+    }
+    if (activePerm === 'auto' && policyReq.tool === 'shell') {
+      const rawCmd = String((policyReq.input as Record<string, unknown> | undefined)?.command ?? '').trim();
+      const cmd = stripProjectRootCdPrefix(rawCmd, policyReq.projectRoot);
+      if (SAFE_AUTO_TEST_COMMAND_RE.test(cmd) && !/[;&|`$><\n\\]/.test(cmd)) {
+        const classified = policy.classify(policyReq);
+        if (classified.decision === 'ask') {
+          return {
+            ...classified,
+            decision: 'allow',
+            rule: 'shell-auto-test-runner-allow',
+            reasons: [...classified.reasons, 'authorized safe workspace test/check command in shell auto permission mode'],
+          };
+        }
+        return classified;
+      }
+    }
+    return baseAuthorize(policyReq);
+  };
+}
+
+/** Creates an AI request handler backed by RookEngine, executeTask, and shell permission policy. */
+export function createShellAiHandler(handlerOpts: CreateShellAiHandlerOptions = {}): ShellAiHandler {
+  const effectiveVersion = handlerOpts.version ?? resolveAuthoritativePackageVersion();
+  const engineCache = new Map<string, Awaited<ReturnType<typeof import('../engine.js').createEngine>>>();
+  let currentState: ShellSessionState | undefined;
+
+  return async (request: string, s: ShellSessionState, signal?: AbortSignal): Promise<number> => {
+    currentState = s;
+    console.log(`[AI] Routing request: "${request}" (cwd: ${s.cwd})`);
+    const previousCwd = process.cwd();
+    const wazirHome = s.env.WAZIR_HOME || process.env.WAZIR_HOME || '';
+    const prevHomeEnv = process.env.WAZIR_HOME;
+    const skipDiscovery = handlerOpts.skipRuntimeDiscovery ?? s.env.WAZIR_SKIP_RUNTIME_DISCOVERY === '1';
+
+    try {
+      if (fs.existsSync(s.cwd)) {
+        process.chdir(s.cwd);
+      }
+      if (s.env.WAZIR_HOME && s.env.WAZIR_HOME !== process.env.WAZIR_HOME) {
+        process.env.WAZIR_HOME = s.env.WAZIR_HOME;
+      }
+
+      const { createEngine } = await import('../engine.js');
+      const { executeTask } = await import('../run.js');
+      const cacheKey = `${path.resolve(s.cwd)}::${wazirHome}::${skipDiscovery ? 'skip' : 'live'}`;
+      let engine = engineCache.get(cacheKey);
+      if (!engine) {
+        engine = await createEngine({
+          projectRoot: s.cwd,
+          quiet: true,
+          fastStartup: handlerOpts.fastStartup ?? true,
+          skipRuntimeDiscovery: skipDiscovery,
+        });
+        attachShellPermissionPolicy(engine.policy, () => currentState?.permissionMode ?? 'auto', handlerOpts);
+        engineCache.set(cacheKey, engine);
+      }
+
+      const registeredModels = engine.models.list();
+      if (registeredModels.length === 0) {
+        const msg = 'No AI models or providers are configured or reachable in this environment.';
+        console.error(`[wazir-ai] ${msg} Native shell commands ('! <cmd>') remain operational.`);
+        s.lastAiOutcome = { success: false, errors: [msg], reasons: [msg] };
+        return 1;
+      }
+
+      if (
+        s.model &&
+        !s.model.startsWith('external:') &&
+        !(s.model.startsWith('nvidia/') && engine.hostedAdapters.has('nvidia')) &&
+        !engine.models.get(s.model) &&
+        !registeredModels.some((m) => m.id === s.model)
+      ) {
+        const msg = `Requested model '${s.model}' is not registered or reachable. Run 'models' to inspect available models.`;
+        console.error(`[wazir-ai] ${msg}`);
+        s.lastAiOutcome = { success: false, modelId: s.model, errors: [msg], reasons: [msg] };
+        return 1;
+      }
+
+      const runOnce = (modelOverride?: string) =>
+        executeTask(engine!, request, {
+          model: modelOverride ?? s.model,
+          agent: 'wazir-coding',
+          signal,
+          quiet: true,
+        });
+
+      let outcome = await runOnce();
+
+      if (!outcome.success && !s.model) {
+        const combinedReasons = [...(outcome.errors ?? []), ...(outcome.reasons ?? [])].join(' ');
+        if (/MODEL_ADMISSION_DENIED|INSUFFICIENT_MEMORY|resource exhaustion|no runtime/i.test(combinedReasons)) {
+          const failedModelId = outcome.decision?.modelId;
+          const loadedInstance = engine.lifecycle
+            .list()
+            .find(
+              (inst) =>
+                (inst.loaded || inst.state === 'READY' || inst.state === 'LOADED') &&
+                inst.modelId !== failedModelId &&
+                engine!.runtimes.get(inst.runtimeId)?.health !== 'unavailable',
+            );
+          if (loadedInstance) {
+            outcome = await runOnce(loadedInstance.modelId);
+          }
+        }
+      }
+
+      const dec = outcome.decision;
+      const modelId = dec?.modelId ?? s.model ?? 'unknown';
+      const runtimeId = dec?.runtimeId ?? 'unknown';
+      const computerId = dec?.computerId ?? (runtimeId === 'nvidia' ? 'hosted(nvidia)' : 'local');
+      s.lastAiOutcome = {
+        success: outcome.success,
+        executionId: outcome.executionId,
+        modelId,
+        runtimeId,
+        computerId,
+        result: outcome.result,
+        errors: outcome.errors,
+        reasons: outcome.reasons,
+      };
+
+      console.log(
+        `[wazir-ai] model=${modelId} runtime=${runtimeId} computer=${computerId} executionId=${outcome.executionId} success=${outcome.success}`,
+      );
+      if (outcome.result && outcome.result.trim()) {
+        console.log(outcome.result.trimEnd());
+      }
+      if (!outcome.success) {
+        const details = [...(outcome.errors ?? []), ...(outcome.reasons ?? [])].filter(Boolean);
+        if (details.length > 0) {
+          console.error(`[wazir-ai] Failed: ${details.join(' | ')}`);
+        }
+        return signal?.aborted ? 130 : 1;
+      }
+      return 0;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[wazir-ai] Execution failed: ${msg}`);
+      s.lastAiOutcome = { success: false, errors: [msg], reasons: [msg] };
+      const diag = new DiagnosticQueue();
+      diag.enqueue({
+        appVersion: effectiveVersion,
+        errorCode: 'ERR_SHELL_AI_EXEC',
+        failureCategory: 'command_routing',
+        component: 'wa-shell',
+        exceptionCategory: err instanceof Error ? err.name : 'Error',
+        taskPhase: 'execute',
+      });
+      return signal?.aborted ? 130 : 1;
+    } finally {
+      if (prevHomeEnv === undefined) {
+        delete process.env.WAZIR_HOME;
+      } else {
+        process.env.WAZIR_HOME = prevHomeEnv;
+      }
+      try {
+        process.chdir(previousCwd);
+      } catch {
+        // ignore restore errors
+      }
+    }
+  };
+}
+
 export async function launchInteractiveWazirShell(options: {
   command?: string;
   ai?: boolean;
   tools?: boolean;
   version?: string;
   batch?: boolean;
+  model?: string;
+  permissions?: string;
 } = {}): Promise<void> {
   const effectiveVersion =
     options.version && options.version !== '0.3.1' ? options.version : resolveAuthoritativePackageVersion();
   const wazirHome = process.env.WAZIR_HOME || path.join(os.homedir(), '.wazir');
+  const rawPerm = options.permissions?.trim().toLowerCase();
+  if (rawPerm && rawPerm !== 'ask' && rawPerm !== 'auto' && rawPerm !== 'read-only') {
+    console.error(`[wazir-shell] Invalid permission mode '${options.permissions}'. Expected: ask | auto | read-only`);
+    process.exitCode = 1;
+    return;
+  }
+  const permissionMode: ShellPermissionMode =
+    rawPerm === 'ask' || rawPerm === 'read-only' ? rawPerm : 'auto';
   const state = createInitialShellState({
     initialCwd: process.cwd(),
     historyFile: path.join(wazirHome, 'shell_history'),
+    model: options.model,
+    permissionMode,
   });
 
   if (options.tools) {
@@ -636,39 +1118,10 @@ export async function launchInteractiveWazirShell(options: {
 
   const aiHandler = options.ai === false
     ? undefined
-    : async (request: string, s: ShellSessionState) => {
-        console.log(`[AI] Routing request: "${request}" (cwd: ${s.cwd})`);
-        const previousCwd = process.cwd();
-        try {
-          if (fs.existsSync(s.cwd)) {
-            process.chdir(s.cwd);
-          }
-          const { createEngine } = await import('../engine.js');
-          const { executeTask } = await import('../run.js');
-          const engine = await createEngine({ projectRoot: s.cwd, quiet: true });
-          const outcome = await executeTask(engine, request, {});
-          return outcome.success ? 0 : 1;
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          console.error(`[wazir-ai] Execution failed: ${msg}`);
-          const diag = new DiagnosticQueue();
-          diag.enqueue({
-            appVersion: effectiveVersion,
-            errorCode: 'ERR_SHELL_AI_EXEC',
-            failureCategory: 'command_routing',
-            component: 'wa-shell',
-            exceptionCategory: err instanceof Error ? err.name : 'Error',
-            taskPhase: 'execute',
-          });
-          return 1;
-        } finally {
-          try {
-            process.chdir(previousCwd);
-          } catch {
-            // ignore restore errors
-          }
-        }
-      };
+    : createShellAiHandler({
+        interactive: !options.command && !options.batch && Boolean(process.stdin.isTTY),
+        version: effectiveVersion,
+      });
 
   if (options.command) {
     const code = await executeShellLine(options.command, state, aiHandler);
@@ -701,43 +1154,61 @@ export async function launchInteractiveWazirShell(options: {
     console.log('');
   }
 
-  const completer = (line: string): [string[], string] => {
-    const builtins = [
-      'loop ', 'graph ', 'goal ', 'jobs', 'status', 'inspect ', 'pause ', 'resume ', 'stop ',
-      'agents', 'models', 'fleet', 'history', 'help',
-      'cd ', 'pwd', 'export ', 'unset ', 'alias ', 'unalias ', 'tools', 'exit', 'quit',
-      '/mode auto', '/mode shell', '/mode ai',
-    ];
-    const hits = builtins.filter((c) => c.startsWith(line));
-    return [hits.length ? hits : builtins, line];
-  };
+  const completer = (line: string): [string[], string] => completeShellInput(line, state);
 
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-    prompt: `wazir:${path.basename(state.cwd) || '/'}$ `,
-    completer,
-  });
-
-  rl.on('SIGINT', () => {
+  const onSigint = () => {
     if (state.activeChild && state.activeChild.exitCode === null) {
-      state.activeChild.kill('SIGINT');
-      return;
+      terminateChildProcessTree(state.activeChild, 'SIGINT');
     }
-    console.log('^C');
-    rl.prompt();
-  });
+  };
+  process.on('SIGINT', onSigint);
 
-  rl.prompt();
-  for await (const line of rl) {
-    const trimmed = line.trim();
-    await executeShellLine(trimmed, state, aiHandler);
-    if (state.shouldExit) {
-      rl.close();
-      break;
+  try {
+    while (!state.shouldExit) {
+      const promptText = `wazir:${path.basename(state.cwd) || '/'}$ `;
+      const lineResult = await new Promise<{ type: 'line'; value: string } | { type: 'eof' }>((resolve) => {
+        const rl = readline.createInterface({
+          input: process.stdin,
+          output: process.stdout,
+          prompt: promptText,
+          completer,
+          history: [...state.history].reverse(),
+        });
+        let settled = false;
+        rl.on('SIGINT', () => {
+          console.log('^C');
+          rl.prompt();
+        });
+        rl.on('line', (rawLine) => {
+          if (settled) return;
+          settled = true;
+          rl.close();
+          if (process.stdin.isTTY && typeof process.stdin.setRawMode === 'function') {
+            process.stdin.setRawMode(false);
+          }
+          resolve({ type: 'line', value: rawLine });
+        });
+        rl.on('close', () => {
+          if (settled) return;
+          settled = true;
+          resolve({ type: 'eof' });
+        });
+        rl.prompt();
+      });
+
+      if (lineResult.type === 'eof') {
+        break;
+      }
+
+      const trimmed = lineResult.value.trim();
+      await executeShellLine(trimmed, state, aiHandler);
+      if (state.shouldExit) {
+        break;
+      }
+      process.stdin.resume();
     }
-    rl.setPrompt(`wazir:${path.basename(state.cwd) || '/'}$ `);
-    rl.prompt();
+  } finally {
+    process.removeListener('SIGINT', onSigint);
   }
   process.exitCode = state.lastExitCode;
 }
@@ -751,7 +1222,9 @@ export function registerShellAndMetaCommands(program: Command, cliVersion?: stri
     .option('-c, --command <cmd>', 'Execute a single command or natural-language request and exit')
     .option('--no-ai', 'Run strictly in offline native-shell mode')
     .option('--tools', 'List discovered optional shell enhancement tools (fzf, zoxide, rg, bat, atuin, lazygit) and exit')
-    .action(async (options: { command?: string; ai?: boolean; tools?: boolean }) => {
+    .option('-m, --model <model>', 'Pin a specific model ID for AI and workflow commands in the shell session')
+    .option('--permissions <mode>', 'Set AI tool permission mode: ask | auto | read-only')
+    .action(async (options: { command?: string; ai?: boolean; tools?: boolean; model?: string; permissions?: string }) => {
       await launchInteractiveWazirShell({ ...options, version: effectiveVersion });
     });
 

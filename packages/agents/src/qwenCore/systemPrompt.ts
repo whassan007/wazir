@@ -23,6 +23,7 @@ export function buildQwenSystemPrompt(options: QwenSystemPromptOptions = {}): st
   const hasTodoTool = toolSet.has('todo_write');
   const hasMultiEdit = toolSet.has('multi_edit');
   const hasReadMany = toolSet.has('read_many_files');
+  const hasCheckTools = toolSet.has('test') || toolSet.has('build') || toolSet.has('lint') || toolSet.has('typecheck');
 
   const parts: string[] = [
     'You are Wazir, an autonomous software engineering agent operating inside a policy-governed workspace.',
@@ -37,6 +38,11 @@ export function buildQwenSystemPrompt(options: QwenSystemPromptOptions = {}): st
       (hasReadMany ? ' or `read_many_files`' : '') +
       ' before editing it (unless you just created it). Include 2-3 unchanged context lines in `oldString` and `newString` so replacements match uniquely.' +
       (hasMultiEdit ? ' Prefer `multi_edit` when applying multiple non-contiguous edits to the same file.' : ''),
+    ...(hasCheckTools
+      ? [
+          '- **Use dedicated verification tools (`test`, `build`, `lint`, `typecheck`)**: When running tests, builds, linters, or typechecks, always call the dedicated `test`, `build`, `lint`, or `typecheck` tools instead of running `npm test`, `node --test`, `deno test`, `bun test`, `vitest`, `jest`, `pytest`, or build commands through the `shell` tool.',
+        ]
+      : []),
     ...(hasTodoTool
       ? [
           '- **Task tracking (`todo_write`)**: Use `todo_write` ONLY for complex multi-step engineering tasks (3+ distinct steps). Never call `todo_write` for trivial edits, single commands, or Q&A.',

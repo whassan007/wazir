@@ -142,4 +142,48 @@ describe('classifyShellInput', () => {
     expect(classifyShellInput('jobs', 'shell').mode).toBe('shell');
     expect(classifyShellInput('status', 'ai').mode).toBe('ai');
   });
+
+  it('routes natural language find/fix requests to ai while keeping POSIX find invocations in shell (DEF-002)', () => {
+    expect(classifyShellInput('find broken tests')).toMatchObject({ mode: 'ai', explicit: false });
+    expect(classifyShellInput('fix failing tests')).toMatchObject({ mode: 'ai', explicit: false });
+    expect(classifyShellInput('find relevant code for model routing')).toMatchObject({ mode: 'ai', explicit: false });
+    expect(classifyShellInput('find unused imports in this repository')).toMatchObject({ mode: 'ai', explicit: false });
+
+    expect(classifyShellInput('find . -name "*.ts"')).toMatchObject({ mode: 'shell' });
+    expect(classifyShellInput('find packages -maxdepth 2 -type d')).toMatchObject({ mode: 'shell' });
+    expect(classifyShellInput('find apps/cli -name shellCommand.ts')).toMatchObject({ mode: 'shell' });
+  });
+
+  it('parses /model and /permissions control directives deterministically', () => {
+    expect(classifyShellInput('/model qwen/qwen3-30b-a3b')).toMatchObject({
+      mode: 'control',
+      explicit: true,
+      modelChange: 'qwen/qwen3-30b-a3b',
+    });
+    expect(classifyShellInput('/model auto')).toMatchObject({
+      mode: 'control',
+      explicit: true,
+      modelChange: 'auto',
+    });
+    expect(classifyShellInput('/model')).toMatchObject({
+      mode: 'control',
+      explicit: true,
+      modelChange: '',
+    });
+    expect(classifyShellInput('/permissions read-only')).toMatchObject({
+      mode: 'control',
+      explicit: true,
+      permissionChange: 'read-only',
+    });
+    expect(classifyShellInput('/permissions ask')).toMatchObject({
+      mode: 'control',
+      explicit: true,
+      permissionChange: 'ask',
+    });
+    expect(classifyShellInput('/permissions auto')).toMatchObject({
+      mode: 'control',
+      explicit: true,
+      permissionChange: 'auto',
+    });
+  });
 });

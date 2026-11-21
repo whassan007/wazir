@@ -1,0 +1,9 @@
+Wazir Shell v0.4.0 — Native OS + AI + Loop + Graph + Goal Shell
+Reserved: loop | graph | goal | jobs | status | inspect | pause | resume | stop | help
+Escapes:  '! <cmd>' / '\<cmd>' / 'os:<cmd>' for OS shell · '? <req>' for AI · '/mode <auto|shell|ai>'
+Detected tools: rg
+
+wazir:mac01-FN9qgj$ wazir:mac01-FN9qgj$ ! uname -m && echo "UTF8:مرحبا-وزير"
+arm64
+UTF8:مرحبا-وزير
+wazir:mac01-FN9qgj$ 

@@ -384,6 +384,50 @@ describe('WazirQwenAgent — Qwen Code 1.0 Core Loop Transplant', () => {
     expect(qwen3.calls).toEqual([
       { id: 'xml-call-2-0', name: 'search', input: { pattern: 'TODO', path: 'src' } },
     ]);
+
+    const qwen3Bare = parseXmlToolCalls(
+      'Let me check.\n\n<function=shell>\n<parameter=command>\nls -la\n</parameter>\n</function>\n</tool_call>',
+      3,
+    );
+    expect(qwen3Bare.strippedContent).toBe('Let me check.');
+    expect(qwen3Bare.calls).toEqual([
+      { id: 'xml-call-3-0', name: 'shell', input: { command: 'ls -la' } },
+    ]);
+  });
+
+  it('7b. WazirQwenAgent executes bare <function=...></function></tool_call> turns without opening <tool_call>', async () => {
+    const dispatched: Array<{ name: string; input: Record<string, unknown> }> = [];
+    let turn = 0;
+    const rt: AgentRuntime = {
+      tools: [{ name: 'read', description: 'read', inputSchema: { type: 'object' } }],
+      runtimeCapabilities: { nativeToolCalling: true },
+      async *generate() {
+        turn += 1;
+        if (turn === 1) {
+          yield {
+            type: 'token',
+            content: 'Checking file.\n<function=read_file>\n<parameter=file_path>src/app.ts</parameter>\n</function>\n</tool_call>',
+          };
+          yield { type: 'completed', finishReason: 'stop' };
+        } else {
+          yield { type: 'token', content: 'Read completed.' };
+          yield { type: 'completed', finishReason: 'stop' };
+        }
+      },
+      async executeTool(name, input) {
+        dispatched.push({ name, input });
+        return { ok: true, output: 'const x = 1;', durationMs: 1 };
+      },
+      cancelCurrentTurn: () => {},
+    };
+    const turns = await collectTurns(
+      createCodingAgent().run(
+        { modelId: 'qwen3-coder:30b', taskDescription: 'Inspect src/app.ts', taskType: 'research', projectRoot: root, mutationRequired: false },
+        rt,
+      ),
+    );
+    expect(dispatched).toEqual([{ name: 'read', input: { path: 'src/app.ts' } }]);
+    expect(turns.some((t) => t.kind === 'done')).toBe(true);
   });
 
   it('8. LoopDetectionService injects a pre-halt [loop warning] nudge when distinct empty searches approach maxNoProgressIterations', async () => {

@@ -38,6 +38,8 @@ export const WAZIR_SHELL_COMMANDS: ReadonlySet<WazirShellCommandName> = new Set(
   'help',
 ]);
 
+export type ShellPermissionMode = 'ask' | 'auto' | 'read-only';
+
 export interface ShellClassification {
   mode: ShellInputMode;
   explicit: boolean;
@@ -45,6 +47,8 @@ export interface ShellClassification {
   reason: string;
   requiresConfirmation: boolean;
   modeChange?: ShellRoutingMode;
+  modelChange?: string;
+  permissionChange?: ShellPermissionMode;
   wazirCommand?: WazirShellCommandName;
   wazirArgs?: string;
 }
@@ -184,7 +188,7 @@ export function classifyShellInput(
     return { mode: 'shell', explicit: false, command: '', reason: 'empty input', requiresConfirmation: false };
   }
 
-  // Control mode switches (/mode shell | /mode ai | /mode auto)
+  // Control mode switches (/mode shell | /mode ai | /mode auto, /model <id|auto>, /permissions <ask|auto|read-only>)
   if (/^\/mode\s+(shell|ai|auto)$/i.test(trimmed)) {
     const nextMode = trimmed.split(/\s+/)[1]!.toLowerCase() as ShellRoutingMode;
     return {
@@ -194,6 +198,28 @@ export function classifyShellInput(
       reason: `session mode switch to '${nextMode}'`,
       requiresConfirmation: false,
       modeChange: nextMode,
+    };
+  }
+  if (/^\/model(?:\s+\S.*)?$/i.test(trimmed)) {
+    const nextModel = trimmed.slice(6).trim();
+    return {
+      mode: 'control',
+      explicit: true,
+      command: trimmed,
+      reason: nextModel ? `model pinned to '${nextModel}'` : 'show current shell model',
+      requiresConfirmation: false,
+      modelChange: nextModel,
+    };
+  }
+  if (/^\/permissions\s+(ask|auto|read-only)$/i.test(trimmed)) {
+    const nextPerm = trimmed.split(/\s+/)[1]!.toLowerCase() as ShellPermissionMode;
+    return {
+      mode: 'control',
+      explicit: true,
+      command: trimmed,
+      reason: `permission mode set to '${nextPerm}'`,
+      requiresConfirmation: false,
+      permissionChange: nextPerm,
     };
   }
 
@@ -299,10 +325,20 @@ export function classifyShellInput(
 
   const ENGLISH_VERB_COMMANDS = new Set(['find', 'make', 'open', 'kill', 'test', 'read', 'diff', 'which', 'clean', 'sort', 'file']);
   const NATURAL_LANGUAGE_FOLLOWERS = new Set([
-    'the', 'a', 'an', 'me', 'my', 'all', 'why', 'how', 'out', 'if', 'whether', 'where', 'what', 'which', 'this', 'that', 'these', 'those', 'failing',
+    'the', 'a', 'an', 'me', 'my', 'all', 'why', 'how', 'out', 'if', 'whether', 'where', 'what', 'which',
+    'this', 'that', 'these', 'those', 'failing', 'broken', 'unused', 'missing', 'slow', 'flaky', 'relevant',
+    'related', 'existing', 'duplicate', 'security', 'bugs', 'bug', 'errors', 'error', 'issues', 'issue',
+    'files', 'tests', 'test', 'code', 'functions', 'classes', 'endpoints', 'routes', 'models',
   ]);
+  const hasUnixFindFlag = tokens.some((tok) => /^-(name|iname|path|ipath|type|maxdepth|mindepth|mtime|size|exec|delete|print|prune)$/i.test(tok));
+  const looksLikeFindNaturalLanguage =
+    firstLower === 'find' &&
+    tokens.length >= 2 &&
+    !hasUnixFindFlag &&
+    !/^[./~$]|^[a-zA-Z0-9_-]+\//.test(tokens[1] ?? '') &&
+    !(tokens[1] ?? '').startsWith('-');
 
-  if (ENGLISH_VERB_COMMANDS.has(firstLower) && NATURAL_LANGUAGE_FOLLOWERS.has(secondToken)) {
+  if ((ENGLISH_VERB_COMMANDS.has(firstLower) && NATURAL_LANGUAGE_FOLLOWERS.has(secondToken)) || looksLikeFindNaturalLanguage) {
     return {
       mode: 'ai',
       explicit: false,

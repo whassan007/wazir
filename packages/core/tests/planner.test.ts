@@ -178,6 +178,20 @@ describe('TaskPlanner — Pre-Execution Task Decomposition', () => {
     expect(inRepoEdit.workspaceMode).toBe('repository');
   });
 
+  it('analyze() treats informational OS/code-lookup questions as non-mutating while keeping fix/create mutating (DEF-006)', () => {
+    const planner = createTaskPlanner();
+    for (const readOnlyPrompt of [
+      'What operating system am I running?',
+      'Explain the architecture of this repository and identify its main components.',
+      'Find the relevant code for model routing',
+      'Which Node.js version is active in this environment?',
+    ]) {
+      expect(planner.analyze(readOnlyPrompt).mutationRequired, readOnlyPrompt).toBe(false);
+    }
+    expect(planner.analyze('Create a temporary TypeScript module with an add(a,b) function').mutationRequired).toBe(true);
+    expect(planner.analyze('Find and fix the failing test, then run the test suite.').mutationRequired).toBe(true);
+  });
+
   describe('trivial fast path', () => {
     it('skips the multi-step DAG and model-based decomposition for a trivial request', async () => {
       const planner = createTaskPlanner();
