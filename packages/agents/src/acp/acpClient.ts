@@ -198,7 +198,7 @@ export class AcpClientAdapter {
           clientCapabilities: {},
           clientInfo: {
             name: 'wazir',
-            version: '0.3.1',
+            version: '0.3.2',
           },
         }),
         spawnFailed,

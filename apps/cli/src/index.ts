@@ -15,6 +15,7 @@ import { closeMCPRegistries, parseWorkloadDistribution, type RoutingMode } from 
 import { installGlobalCrashHandlers } from './crashHandler.js';
 import { createHandoffCommand } from './handoff.js';
 import { registerShellAndMetaCommands } from './commands/shellCommand.js';
+import { resolveAuthoritativePackageVersion } from './version.js';
 import { globalStartupProfiler } from './startupProfiler.js';
 
 globalStartupProfiler.mark('cli.entry');
@@ -25,7 +26,7 @@ globalStartupProfiler.mark('cli.entry');
 // only ever handled inside the TUI, and only while it was running.
 installGlobalCrashHandlers();
 
-export const CLI_VERSION = typeof __WAZIR_VERSION__ === 'string' ? __WAZIR_VERSION__ : '0.3.1';
+export const CLI_VERSION = typeof __WAZIR_VERSION__ === 'string' ? __WAZIR_VERSION__ : resolveAuthoritativePackageVersion();
 
 /**
  * Zero-overhead fast path for version flags (`--version`, `-V`, `version`, `version --json`).

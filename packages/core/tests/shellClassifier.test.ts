@@ -1,10 +1,26 @@
 import { describe, expect, it } from 'vitest';
-import { classifyShellInput } from '../src/services/shellClassifier.js';
+import {
+  classifyShellInput,
+  discoverOptionalShellTools,
+} from '../src/services/shellClassifier.js';
 
 describe('classifyShellInput', () => {
-  it('honors explicit ! and ? prefixes', () => {
-    expect(classifyShellInput('! find the bug')).toMatchObject({ mode: 'shell', explicit: true, command: 'find the bug' });
-    expect(classifyShellInput('? ls -la')).toMatchObject({ mode: 'ai', explicit: true, command: 'ls -la' });
+  it('honors explicit !, ?, and /mode prefixes', () => {
+    expect(classifyShellInput('! find the bug')).toMatchObject({
+      mode: 'shell',
+      explicit: true,
+      command: 'find the bug',
+    });
+    expect(classifyShellInput('? ls -la')).toMatchObject({
+      mode: 'ai',
+      explicit: true,
+      command: 'ls -la',
+    });
+    expect(classifyShellInput('/mode shell')).toMatchObject({
+      mode: 'control',
+      explicit: true,
+      modeChange: 'shell',
+    });
   });
 
   it('recognizes ordinary shell commands deterministically', () => {
@@ -17,7 +33,7 @@ describe('classifyShellInput', () => {
     expect(classifyShellInput('./scripts/assure-verify.sh').mode).toBe('shell');
   });
 
-  it('routes natural language requests to AI and flags destructive ambiguity', () => {
+  it('routes natural language requests to AI, flags destructive ambiguity, and marks unknown single tokens ambiguous', () => {
     const safe = classifyShellInput('find the startup bottleneck in Wazir');
     expect(safe.mode).toBe('ai');
     expect(safe.requiresConfirmation).toBe(false);
@@ -25,5 +41,14 @@ describe('classifyShellInput', () => {
     const risky = classifyShellInput('delete all old log files in my project');
     expect(risky.mode).toBe('ai');
     expect(risky.requiresConfirmation).toBe(true);
+
+    const ambiguous = classifyShellInput('xyzzy_nonexistent_cmd_99');
+    expect(ambiguous.mode).toBe('ambiguous');
+  });
+
+  it('discovers optional shell tools without side effects', () => {
+    const tools = discoverOptionalShellTools('');
+    expect(tools).toHaveLength(6);
+    expect(tools.every((t) => !t.available)).toBe(true);
   });
 });

@@ -115,7 +115,7 @@ describe('Antigravity CLI 1.5+ & Wazir MCP host integration', () => {
       const textBlock = (statusRes.content as Array<{ type: string; text?: string }>)[0];
       expect(textBlock?.type).toBe('text');
       const parsed = JSON.parse(textBlock?.text ?? '{}');
-      expect(parsed.summary.version).toBe('0.3.1');
+      expect(parsed.summary.version).toBe('0.3.2');
       expect(Array.isArray(parsed.computers)).toBe(true);
     } finally {
       await client.close().catch(() => undefined);

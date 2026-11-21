@@ -9,6 +9,32 @@ declare const __WAZIR_VERSION__: string | undefined;
 declare const __WAZIR_COMMIT__: string | undefined;
 declare const __WAZIR_BUILD_DATE__: string | undefined;
 
+export function resolveAuthoritativePackageVersion(): string {
+  if (typeof __WAZIR_VERSION__ === 'string' && __WAZIR_VERSION__.trim()) {
+    return __WAZIR_VERSION__.trim();
+  }
+  const baseDir = typeof __dirname === 'string' ? __dirname : process.cwd();
+  const candidates = [
+    path.resolve(baseDir, '../../../package.json'),
+    path.resolve(baseDir, '../../package.json'),
+    path.resolve(baseDir, '../package.json'),
+    path.resolve(process.cwd(), 'package.json'),
+  ];
+  for (const candidate of candidates) {
+    try {
+      if (existsSync(candidate)) {
+        const parsed = JSON.parse(readFileSync(candidate, 'utf8')) as { name?: string; version?: string };
+        if (parsed?.version && (parsed.name === 'wazir' || parsed.name === '@wazir/cli')) {
+          return parsed.version;
+        }
+      }
+    } catch {
+      // try next candidate
+    }
+  }
+  return '0.3.2';
+}
+
 export interface BuildInfo {
   version: string;
   commit: string;
@@ -68,7 +94,7 @@ export function detectInstallChannel(): string {
 }
 
 export function getBuildInfo(): BuildInfo {
-  let version = typeof __WAZIR_VERSION__ !== 'undefined' ? __WAZIR_VERSION__ : '0.3.1';
+  let version = resolveAuthoritativePackageVersion();
   let commit = typeof __WAZIR_COMMIT__ !== 'undefined' ? __WAZIR_COMMIT__ : '';
   let buildDate = typeof __WAZIR_BUILD_DATE__ !== 'undefined' ? __WAZIR_BUILD_DATE__ : '';
 
