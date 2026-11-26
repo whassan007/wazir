@@ -28,7 +28,7 @@
  *  - /usr/lib/systemd/user/*.service       -> generated user units (%h paths, default.target)
  */
 
-import { readFileSync, writeFileSync, mkdirSync, chmodSync, rmSync, existsSync, copyFileSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, chmodSync, rmSync, existsSync, copyFileSync, statSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, execSync } from 'node:child_process';
@@ -351,6 +351,22 @@ if (existsSync(path.join(ubuntuRoot, 'profile/wazir-gnome-profile.sh'))) {
 writeFileSync(path.join(stagingDir, 'usr/share/doc/wazir/README.md'), readFileSync(path.resolve(rootDir, 'README.md'), 'utf8'), 'utf8');
 writeFileSync(path.join(stagingDir, 'usr/share/doc/wazir/copyright'), readFileSync(path.resolve(rootDir, 'LICENSE'), 'utf8'), 'utf8');
 
+// Normalize modes independent of the build host's umask: dirs 0755, executables
+// 0755, everything else 0644 (dpkg/lintian expectations).
+function normalizeModes(dir) {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      chmodSync(p, 0o755);
+      normalizeModes(p);
+    } else if (entry.isFile()) {
+      chmodSync(p, statSync(p).mode & 0o100 ? 0o755 : 0o644);
+    }
+  }
+}
+chmodSync(stagingDir, 0o755);
+normalizeModes(stagingDir);
+
 // 6. Build .deb package
 const debFile = path.resolve(debOutputDir, `wazir_${version}_${arch}.deb`);
 
@@ -375,7 +391,19 @@ if (dpkgAvailable) {
   execFileSync('tar', [...ownerFlags, '-czf', path.join(arWorkDir, 'control.tar.gz'), '-C', path.join(stagingDir, 'DEBIAN'), '.'], { stdio: 'inherit', env: tarEnv });
   execFileSync('tar', [...ownerFlags, '--exclude', './DEBIAN', '-czf', path.join(arWorkDir, 'data.tar.gz'), '-C', stagingDir, '.'], { stdio: 'inherit', env: tarEnv });
   rmSync(debFile, { force: true });
-  execFileSync('ar', ['rc', debFile, 'debian-binary', 'control.tar.gz', 'data.tar.gz'], { cwd: arWorkDir, stdio: 'inherit' });
+  // Write the System V `ar` container directly: BSD/macOS `ar` injects a
+  // __.SYMDEF member that dpkg rejects.
+  const members = ['debian-binary', 'control.tar.gz', 'data.tar.gz'];
+  const parts = [Buffer.from('!<arch>\n', 'ascii')];
+  const mtime = Math.floor(Date.now() / 1000);
+  for (const name of members) {
+    const data = readFileSync(path.join(arWorkDir, name));
+    const header =
+      `${name}/`.padEnd(16) + String(mtime).padEnd(12) + '0'.padEnd(6) + '0'.padEnd(6) + '100644'.padEnd(8) + String(data.length).padEnd(10) + '`\n';
+    parts.push(Buffer.from(header, 'ascii'), data);
+    if (data.length % 2 === 1) parts.push(Buffer.from('\n', 'ascii'));
+  }
+  writeFileSync(debFile, Buffer.concat(parts));
   rmSync(arWorkDir, { recursive: true, force: true });
 }
 
