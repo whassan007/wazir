@@ -13,13 +13,15 @@ use tauri_plugin_opener::OpenerExt;
 const MAX_PTY_SESSIONS: usize = 32;
 const DIAGNOSTIC_NOTICE_VERSION: &str = "2026-11-20.1";
 
-const USAGE: &str = "Usage: wazir-shell [--cwd <dir>] [--attach <path>]... [-c <input>]\n\n\
-Options:\n\
-  --cwd <dir>        Working directory for the initial tab\n\
-  --attach <path>    Attach a file/directory to the request (repeatable; passed as a structured list)\n\
-  -c, --command <s>  Route <s> through the Wazir Shell router in a new tab (never /bin/sh -c)\n\
-  -h, --help         Show this help and exit\n\
-  -V, --version      Show version and exit\n";
+const USAGE: &str = concat!(
+    "Usage: wazir-shell [--cwd <dir>] [--attach <path>]... [-c <input>]\n\n",
+    "Options:\n",
+    "  --cwd <dir>        Working directory for the initial tab\n",
+    "  --attach <path>    Attach a file/directory (repeatable; passed as a structured list)\n",
+    "  -c, --command <s>  Route <s> through the Wazir Shell router in a new tab (never /bin/sh -c)\n",
+    "  -h, --help         Show this help and exit\n",
+    "  -V, --version      Show version and exit\n",
+);
 
 /// Contract C1 launch arguments (reports/v0.4.3/INTEGRATION-CONTRACTS.md).
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize)]
@@ -1340,6 +1342,14 @@ mod tests {
         let dashdash = parse_launch_args(["--command", "explain", "--", "-weird-name", "x"]).unwrap();
         assert_eq!(dashdash.command.as_deref(), Some("explain"));
         assert_eq!(dashdash.attachments, vec!["-weird-name".to_string(), "x".to_string()]);
+
+        // Values are the NEXT argv element verbatim, even when they start with '-'
+        // (GNOME search queries may start with '-').
+        let dash = parse_launch_args(["-c", "-rf foo", "--attach", "--help", "--cwd", "-dir"]).unwrap();
+        assert_eq!(dash.command.as_deref(), Some("-rf foo"));
+        assert_eq!(dash.attachments, vec!["--help".to_string()]);
+        assert_eq!(dash.cwd.as_deref(), Some("-dir"));
+        assert!(!dash.help);
 
         assert!(parse_launch_args(["--help"]).unwrap().help);
         assert!(parse_launch_args(["--cwd"]).is_err());
