@@ -1,39 +1,39 @@
 {
-  "generatedAt": "2026-11-20T06:49:37.278Z",
+  "generatedAt": "2026-11-26T08:40:22.013Z",
   "totalTasks": 50,
   "tier0Summary": {
     "dispatch": {
       "count": 20,
-      "p50Ms": 0.092,
-      "p95Ms": 0.133,
-      "maxMs": 0.292
+      "p50Ms": 0.2,
+      "p95Ms": 0.682,
+      "maxMs": 1.476
     },
     "total": {
       "count": 20,
-      "p50Ms": 3.882,
-      "p95Ms": 18.117,
-      "maxMs": 76.775
+      "p50Ms": 8.807,
+      "p95Ms": 38.804,
+      "maxMs": 41.789
     }
   },
   "tier1Summary": {
     "dispatch": {
       "count": 30,
-      "p50Ms": 0.001,
-      "p95Ms": 0.004,
-      "maxMs": 0.123
+      "p50Ms": 0.002,
+      "p95Ms": 0.006,
+      "maxMs": 0.15
     },
     "total": {
       "count": 30,
-      "p50Ms": 0.003,
-      "p95Ms": 0.012,
-      "maxMs": 0.224
+      "p50Ms": 0.005,
+      "p95Ms": 0.018,
+      "maxMs": 0.269
     }
   },
   "allDispatchPercentiles": {
     "count": 50,
-    "p50Ms": 0.002,
-    "p95Ms": 0.123,
-    "maxMs": 0.292
+    "p50Ms": 0.004,
+    "p95Ms": 0.582,
+    "maxMs": 1.476
   },
   "records": [
     {
@@ -41,8 +41,8 @@
       "category": "standard-linux",
       "route": "shell",
       "backend": "posix-shell",
-      "dispatchOverheadMs": 0.133,
-      "totalDurationMs": 4.459,
+      "dispatchOverheadMs": 0.2,
+      "totalDurationMs": 5.743,
       "exitCode": 0
     },
     {
@@ -50,8 +50,8 @@
       "category": "standard-linux",
       "route": "shell",
       "backend": "posix-shell",
-      "dispatchOverheadMs": 0.292,
-      "totalDurationMs": 4.281,
+      "dispatchOverheadMs": 0.576,
+      "totalDurationMs": 8.421,
       "exitCode": 0
     },
     {
@@ -59,8 +59,8 @@
       "category": "standard-linux",
       "route": "shell",
       "backend": "posix-shell",
-      "dispatchOverheadMs": 0.128,
-      "totalDurationMs": 4.698,
+      "dispatchOverheadMs": 0.674,
+      "totalDurationMs": 9.736,
       "exitCode": 0
     },
     {
@@ -68,8 +68,8 @@
       "category": "standard-linux",
       "route": "shell",
       "backend": "posix-shell",
-      "dispatchOverheadMs": 0.105,
-      "totalDurationMs": 3.831,
+      "dispatchOverheadMs": 0.582,
+      "totalDurationMs": 8.423,
       "exitCode": 0
     },
     {
@@ -77,8 +77,8 @@
       "category": "standard-linux",
       "route": "shell",
       "backend": "posix-shell",
-      "dispatchOverheadMs": 0.009,
-      "totalDurationMs": 2.613,
+      "dispatchOverheadMs": 0.02,
+      "totalDurationMs": 4.999,
       "exitCode": 0
     },
     {
@@ -86,8 +86,8 @@
       "category": "filesystem-nav",
       "route": "shell",
       "backend": "posix-shell",
-      "dispatchOverheadMs": 0.093,
-      "totalDurationMs": 4.801,
+      "dispatchOverheadMs": 0.274,
+      "totalDurationMs": 10.425,
       "exitCode": 0
     },
     {
@@ -95,8 +95,8 @@
       "category": "filesystem-nav",
       "route": "shell",
       "backend": "posix-shell",
-      "dispatchOverheadMs": 0.007,
-      "totalDurationMs": 3.818,
+      "dispatchOverheadMs": 0.025,
+      "totalDurationMs": 14.535,
       "exitCode": 0
     },
     {
@@ -104,8 +104,8 @@
       "category": "file-search",
       "route": "shell",
       "backend": "posix-shell",
-      "dispatchOverheadMs": 0.091,
-      "totalDurationMs": 3.882,
+      "dispatchOverheadMs": 0.682,
+      "totalDurationMs": 9.763,
       "exitCode": 0
     },
     {
@@ -113,8 +113,8 @@
       "category": "storage-analysis",
       "route": "shell",
       "backend": "posix-shell",
-      "dispatchOverheadMs": 0.092,
-      "totalDurationMs": 3.485,
+      "dispatchOverheadMs": 1.476,
+      "totalDurationMs": 14.203,
       "exitCode": 0
     },
     {
@@ -122,8 +122,8 @@
       "category": "process-monitoring",
       "route": "shell",
       "backend": "posix-shell",
-      "dispatchOverheadMs": 0.107,
-      "totalDurationMs": 4.778,
+      "dispatchOverheadMs": 0.144,
+      "totalDurationMs": 38.804,
       "exitCode": 0
     },
     {
@@ -131,8 +131,8 @@
       "category": "standard-linux",
       "route": "shell",
       "backend": "posix-shell",
-      "dispatchOverheadMs": 0.062,
-      "totalDurationMs": 5.477,
+      "dispatchOverheadMs": 0.086,
+      "totalDurationMs": 9.226,
       "exitCode": 0
     },
     {
@@ -140,8 +140,8 @@
       "category": "code-repo",
       "route": "shell",
       "backend": "posix-shell",
-      "dispatchOverheadMs": 0.1,
-      "totalDurationMs": 6.167,
+      "dispatchOverheadMs": 0.272,
+      "totalDurationMs": 11.433,
       "exitCode": 0
     },
     {
@@ -149,8 +149,8 @@
       "category": "code-repo",
       "route": "shell",
       "backend": "posix-shell",
-      "dispatchOverheadMs": 0.01,
-      "totalDurationMs": 76.775,
+      "dispatchOverheadMs": 0.022,
+      "totalDurationMs": 41.789,
       "exitCode": 0
     },
     {
@@ -158,8 +158,8 @@
       "category": "dev-env",
       "route": "shell",
       "backend": "posix-shell",
-      "dispatchOverheadMs": 0.119,
-      "totalDurationMs": 18.117,
+      "dispatchOverheadMs": 0.203,
+      "totalDurationMs": 25.703,
       "exitCode": 0
     },
     {
@@ -167,8 +167,8 @@
       "category": "dev-env",
       "route": "shell",
       "backend": "posix-shell",
-      "dispatchOverheadMs": 0.122,
-      "totalDurationMs": 5.357,
+      "dispatchOverheadMs": 0.293,
+      "totalDurationMs": 8.807,
       "exitCode": 0
     },
     {
@@ -176,8 +176,8 @@
       "category": "network",
       "route": "shell",
       "backend": "posix-shell",
-      "dispatchOverheadMs": 0.116,
-      "totalDurationMs": 3.556,
+      "dispatchOverheadMs": 0.542,
+      "totalDurationMs": 7.799,
       "exitCode": 0
     },
     {
@@ -185,8 +185,8 @@
       "category": "package-updates",
       "route": "shell",
       "backend": "posix-shell",
-      "dispatchOverheadMs": 0.005,
-      "totalDurationMs": 2.394,
+      "dispatchOverheadMs": 0.014,
+      "totalDurationMs": 5.392,
       "exitCode": 0
     },
     {
@@ -194,8 +194,8 @@
       "category": "package-install",
       "route": "shell",
       "backend": "posix-shell",
-      "dispatchOverheadMs": 0.002,
-      "totalDurationMs": 2.395,
+      "dispatchOverheadMs": 0.008,
+      "totalDurationMs": 4.892,
       "exitCode": 0
     },
     {
@@ -203,8 +203,8 @@
       "category": "service-diagnostics",
       "route": "shell",
       "backend": "posix-shell",
-      "dispatchOverheadMs": 0.003,
-      "totalDurationMs": 2.757,
+      "dispatchOverheadMs": 0.008,
+      "totalDurationMs": 4.233,
       "exitCode": 0
     },
     {
@@ -212,8 +212,8 @@
       "category": "app-launch",
       "route": "shell",
       "backend": "posix-shell",
-      "dispatchOverheadMs": 0.003,
-      "totalDurationMs": 2.474,
+      "dispatchOverheadMs": 0.007,
+      "totalDurationMs": 4.867,
       "exitCode": 0
     },
     {
@@ -221,8 +221,8 @@
       "category": "filesystem-nav",
       "route": "ai",
       "backend": "wazir-native",
-      "dispatchOverheadMs": 0.123,
-      "totalDurationMs": 0.224,
+      "dispatchOverheadMs": 0.15,
+      "totalDurationMs": 0.269,
       "exitCode": 0
     },
     {
@@ -230,8 +230,8 @@
       "category": "file-search",
       "route": "ai",
       "backend": "wazir-native",
-      "dispatchOverheadMs": 0.077,
-      "totalDurationMs": 0.082,
+      "dispatchOverheadMs": 0.096,
+      "totalDurationMs": 0.106,
       "exitCode": 0
     },
     {
@@ -239,8 +239,8 @@
       "category": "app-launch",
       "route": "ai",
       "backend": "wazir-native",
-      "dispatchOverheadMs": 0.002,
-      "totalDurationMs": 0.006,
+      "dispatchOverheadMs": 0.004,
+      "totalDurationMs": 0.009,
       "exitCode": 0
     },
     {
@@ -248,8 +248,8 @@
       "category": "package-install",
       "route": "ai",
       "backend": "wazir-native",
-      "dispatchOverheadMs": 0.004,
-      "totalDurationMs": 0.007,
+      "dispatchOverheadMs": 0.006,
+      "totalDurationMs": 0.012,
       "exitCode": 0
     },
     {
@@ -257,8 +257,8 @@
       "category": "package-updates",
       "route": "ai",
       "backend": "wazir-native",
-      "dispatchOverheadMs": 0.002,
-      "totalDurationMs": 0.005,
+      "dispatchOverheadMs": 0.003,
+      "totalDurationMs": 0.008,
       "exitCode": 0
     },
     {
@@ -266,8 +266,8 @@
       "category": "service-diagnostics",
       "route": "ai",
       "backend": "wazir-native",
-      "dispatchOverheadMs": 0.002,
-      "totalDurationMs": 0.004,
+      "dispatchOverheadMs": 0.004,
+      "totalDurationMs": 0.007,
       "exitCode": 0
     },
     {
@@ -284,8 +284,8 @@
       "category": "network",
       "route": "ai",
       "backend": "wazir-native",
-      "dispatchOverheadMs": 0.001,
-      "totalDurationMs": 0.004,
+      "dispatchOverheadMs": 0.002,
+      "totalDurationMs": 0.005,
       "exitCode": 0
     },
     {
@@ -294,7 +294,7 @@
       "route": "ai",
       "backend": "wazir-native",
       "dispatchOverheadMs": 0.002,
-      "totalDurationMs": 0.006,
+      "totalDurationMs": 0.008,
       "exitCode": 0
     },
     {
@@ -303,7 +303,7 @@
       "route": "ai",
       "backend": "wazir-native",
       "dispatchOverheadMs": 0.002,
-      "totalDurationMs": 0.012,
+      "totalDurationMs": 0.018,
       "exitCode": 0
     },
     {
@@ -312,7 +312,7 @@
       "route": "ai",
       "backend": "wazir-native",
       "dispatchOverheadMs": 0.002,
-      "totalDurationMs": 0.005,
+      "totalDurationMs": 0.006,
       "exitCode": 0
     },
     {
@@ -320,8 +320,8 @@
       "category": "code-repo",
       "route": "ai",
       "backend": "wazir-native",
-      "dispatchOverheadMs": 0.001,
-      "totalDurationMs": 0.003,
+      "dispatchOverheadMs": 0.002,
+      "totalDurationMs": 0.005,
       "exitCode": 0
     },
     {
@@ -330,7 +330,7 @@
       "route": "ai",
       "backend": "wazir-native",
       "dispatchOverheadMs": 0.002,
-      "totalDurationMs": 0.003,
+      "totalDurationMs": 0.005,
       "exitCode": 0
     },
     {
@@ -338,12 +338,21 @@
       "category": "desktop-settings",
       "route": "ai",
       "backend": "wazir-native",
-      "dispatchOverheadMs": 0.003,
-      "totalDurationMs": 0.004,
+      "dispatchOverheadMs": 0.004,
+      "totalDurationMs": 0.005,
       "exitCode": 0
     },
     {
       "id": 35,
+      "category": "voice-instructions",
+      "route": "ai",
+      "backend": "wazir-native",
+      "dispatchOverheadMs": 0.006,
+      "totalDurationMs": 0.009,
+      "exitCode": 0
+    },
+    {
+      "id": 36,
       "category": "voice-instructions",
       "route": "ai",
       "backend": "wazir-native",
@@ -352,21 +361,12 @@
       "exitCode": 0
     },
     {
-      "id": 36,
-      "category": "voice-instructions",
-      "route": "ai",
-      "backend": "wazir-native",
-      "dispatchOverheadMs": 0.001,
-      "totalDurationMs": 0.002,
-      "exitCode": 0
-    },
-    {
       "id": 37,
       "category": "backend-changes",
       "route": "ai",
       "backend": "wazir-native",
       "dispatchOverheadMs": 0.001,
-      "totalDurationMs": 0.002,
+      "totalDurationMs": 0.003,
       "exitCode": 0
     },
     {
@@ -384,7 +384,7 @@
       "route": "ai",
       "backend": "wazir-native",
       "dispatchOverheadMs": 0.001,
-      "totalDurationMs": 0.003,
+      "totalDurationMs": 0.002,
       "exitCode": 0
     },
     {
@@ -393,7 +393,7 @@
       "route": "ai",
       "backend": "wazir-native",
       "dispatchOverheadMs": 0.001,
-      "totalDurationMs": 0.003,
+      "totalDurationMs": 0.002,
       "exitCode": 0
     },
     {
@@ -411,7 +411,7 @@
       "route": "ai",
       "backend": "wazir-native",
       "dispatchOverheadMs": 0.001,
-      "totalDurationMs": 0.003,
+      "totalDurationMs": 0.002,
       "exitCode": 0
     },
     {
@@ -419,8 +419,8 @@
       "category": "standard-linux",
       "route": "ai",
       "backend": "wazir-native",
-      "dispatchOverheadMs": 0.001,
-      "totalDurationMs": 0.003,
+      "dispatchOverheadMs": 0.002,
+      "totalDurationMs": 0.004,
       "exitCode": 0
     },
     {
@@ -429,7 +429,7 @@
       "route": "ai",
       "backend": "wazir-native",
       "dispatchOverheadMs": 0.002,
-      "totalDurationMs": 0.003,
+      "totalDurationMs": 0.004,
       "exitCode": 0
     },
     {
@@ -437,8 +437,8 @@
       "category": "storage-analysis",
       "route": "ai",
       "backend": "wazir-native",
-      "dispatchOverheadMs": 0.001,
-      "totalDurationMs": 0.002,
+      "dispatchOverheadMs": 0.002,
+      "totalDurationMs": 0.003,
       "exitCode": 0
     },
     {
@@ -446,8 +446,8 @@
       "category": "process-monitoring",
       "route": "ai",
       "backend": "wazir-native",
-      "dispatchOverheadMs": 0.001,
-      "totalDurationMs": 0.002,
+      "dispatchOverheadMs": 0.002,
+      "totalDurationMs": 0.004,
       "exitCode": 0
     },
     {
@@ -455,8 +455,8 @@
       "category": "dev-env",
       "route": "ai",
       "backend": "wazir-native",
-      "dispatchOverheadMs": 0.001,
-      "totalDurationMs": 0.002,
+      "dispatchOverheadMs": 0.003,
+      "totalDurationMs": 0.004,
       "exitCode": 0
     },
     {
@@ -464,8 +464,8 @@
       "category": "code-repo",
       "route": "ai",
       "backend": "wazir-native",
-      "dispatchOverheadMs": 0.001,
-      "totalDurationMs": 0.002,
+      "dispatchOverheadMs": 0.003,
+      "totalDurationMs": 0.005,
       "exitCode": 0
     },
     {
@@ -473,7 +473,7 @@
       "category": "desktop-settings",
       "route": "ai",
       "backend": "wazir-native",
-      "dispatchOverheadMs": 0.001,
+      "dispatchOverheadMs": 0.002,
       "totalDurationMs": 0.003,
       "exitCode": 0
     },
@@ -482,7 +482,7 @@
       "category": "service-diagnostics",
       "route": "ai",
       "backend": "wazir-native",
-      "dispatchOverheadMs": 0.001,
+      "dispatchOverheadMs": 0.002,
       "totalDurationMs": 0.003,
       "exitCode": 0
     }
