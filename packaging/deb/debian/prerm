@@ -1,12 +1,20 @@
 #!/bin/sh
 set -e
 
-# Stop running services before package removal or upgrade
-if [ -d /run/systemd/system ]; then
-  systemctl stop wazir-api.service >/dev/null 2>&1 || true
-  systemctl stop wazir-worker.service >/dev/null 2>&1 || true
-  systemctl disable wazir-api.service >/dev/null 2>&1 || true
-  systemctl disable wazir-worker.service >/dev/null 2>&1 || true
-fi
+# Only system units are touched, and only on actual removal: an upgrade must not
+# disable services an administrator enabled. User units (/usr/lib/systemd/user)
+# are never enabled, started, stopped or disabled for other users by this package.
+case "$1" in
+  remove|deconfigure)
+    if [ -d /run/systemd/system ]; then
+      systemctl stop wazir-api.service >/dev/null 2>&1 || true
+      systemctl stop wazir-worker.service >/dev/null 2>&1 || true
+      systemctl disable wazir-api.service >/dev/null 2>&1 || true
+      systemctl disable wazir-worker.service >/dev/null 2>&1 || true
+    fi
+    ;;
+  upgrade|failed-upgrade)
+    ;;
+esac
 
 exit 0

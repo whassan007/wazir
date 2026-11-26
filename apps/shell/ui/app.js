@@ -418,9 +418,9 @@
     }
   }
 
-  async function createTab() {
+  async function createTab(opts = {}) {
     const shell = state.bootstrap?.discovered_shell || '/bin/zsh';
-    const cwd = state.bootstrap?.initial_cwd || '~';
+    const cwd = opts.cwd || state.bootstrap?.initial_cwd || '~';
     if (!invoke) {
       const id = `web-${Date.now().toString(36)}`;
       state.tabs.push({
@@ -434,7 +434,7 @@
       renderWorkspace();
       return id;
     }
-    const id = await invoke('pty_spawn', { cols: 100, rows: 28, cwd: null });
+    const id = await invoke('pty_spawn', { cols: 100, rows: 28, cwd: opts.cwd || null });
     state.tabs.push({
       id,
       splitDirection: 'vertical',
@@ -575,7 +575,10 @@
     statusModeEl.textContent = `Mode: ${modeSelect.options[modeSelect.selectedIndex]?.text || modeSelect.value}`;
   }
 
-  async function executeCommandInput(raw, explicitMode = null) {
+  // `context.attachments` is a structured string[] (contract C1); paths are never
+  // interpolated into `raw` and are only forwarded to the AI tier as argv elements.
+  async function executeCommandInput(raw, explicitMode = null, context = {}) {
+    const attachments = Array.isArray(context.attachments) ? context.attachments.filter((p) => typeof p === 'string' && p) : [];
     const pane = getActivePane();
     if (!pane) return { status: 'error', error: 'No active terminal pane' };
     if (invoke) {
@@ -703,6 +706,7 @@
         cwd: pane.cwd || null,
         model: state.settings.pinnedModel || null,
         permissionMode: state.settings.permissionMode || 'auto',
+        attachments: attachments.length ? attachments : null,
       });
       writeToPane(pane, `${res}\n`);
       return { status: 'success', tier: 2, output: res };
@@ -1117,7 +1121,17 @@
     updateRouteBadge();
     updateDiagBadge();
 
-    await createTab();
+    const launch = state.bootstrap?.launch || {};
+    const launchAttachments = Array.isArray(launch.attachments) ? launch.attachments : [];
+    await createTab({ cwd: launch.cwd || null });
+    const activePane = getActivePane();
+    if (activePane && launchAttachments.length) {
+      writeToPane(activePane, `\n[attachments] ${launchAttachments.length} path(s):\n${launchAttachments.map((p) => `  - ${p}`).join('\n')}\n`);
+    }
+    if (typeof launch.command === 'string' && launch.command.trim()) {
+      // Route `-c <input>` through the normal Tier 0..3 router — never /bin/sh -c.
+      void executeCommandInput(launch.command, null, { attachments: launchAttachments });
+    }
 
     const c = state.consent;
     if (!c.onboardingCompleted && !c.accepted && !c.declined && !c.configuredLater) {
