@@ -473,17 +473,21 @@ export class NatsWireTransport implements CoordinationTransportAdapter {
     }
     const wirePayload = Buffer.concat(chunks);
     const socket = this.socket;
-    // Register the waiter before writing so a fast PONG cannot be missed.
+
+    // Check writability first and throw before registering the waiter
+    if (!socket || socket.destroyed || !socket.writable) {
+      throw new Error('NATS socket is not writable');
+    }
+
+    // Register the waiter immediately before writing so a fast PONG cannot be missed.
     const confirmed = this.confirmPublish ? this.waitForPong() : undefined;
     confirmed?.catch(() => undefined);
 
     await new Promise<void>((resolve, reject) => {
-      if (!socket || socket.destroyed || !socket.writable) {
-        reject(new Error('NATS socket is not writable'));
-        return;
-      }
       socket.write(wirePayload, (err) => {
         if (err) {
+          // Remove the waiter on write error and fail all waiters
+          this.failPongWaiters(err);
           this.connected = false;
           reject(err);
         } else {
