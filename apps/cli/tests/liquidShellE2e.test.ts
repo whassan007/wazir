@@ -5,6 +5,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   LIQUID_SHELL_MODEL_ID,
   LIQUID_SHELL_PROVIDER,
+  resolveEmbeddedAssetLocations,
   shutdownLiquidEmbeddedServer,
 } from '@wazir/core';
 import {
@@ -14,6 +15,18 @@ import {
 } from '../src/commands/shellCommand.js';
 
 const REPO_ROOT = path.resolve(__dirname, '../../..');
+
+// Path B runs the real bundled GGUF on a real llama-server. Both are gitignored/host
+// assets, so skip (with the reason in the test name) when they are absent instead of
+// failing on the hosted-provider policy fallback. Same guard as
+// packages/core/tests/liquidShellOrchestrator.test.ts.
+const PROBED_ASSETS = resolveEmbeddedAssetLocations({ repoRoot: REPO_ROOT, verifyChecksum: false });
+const LIVE_SKIP_REASON = !PROBED_ASSETS.modelPath
+  ? 'bundled LFM2.5-350M-Q4_K_M.gguf not found (gitignored asset; set WAZIR_EMBEDDED_MODEL_PATH or place it in assets/models/wazir-shell-mini/)'
+  : !PROBED_ASSETS.runtimeBinaryPath
+    ? 'llama-server binary not found (set WAZIR_EMBEDDED_RUNTIME_PATH or install assets/runtimes/<platform>/llama-server)'
+    : undefined;
+if (LIVE_SKIP_REASON) console.warn(`[liquidShellE2e.test] SKIPPING live Liquid AI E2E: ${LIVE_SKIP_REASON}`);
 
 describe('Wazir Shell Built-In Liquid AI E2E Verification (Offline Zero-Config)', () => {
   let tmpHome: string;
@@ -26,7 +39,7 @@ describe('Wazir Shell Built-In Liquid AI E2E Verification (Offline Zero-Config)'
     await shutdownLiquidEmbeddedServer();
   });
 
-  it('executes all required Path A deterministic and Path B Liquid AI shell requests offline without Ollama, LM Studio, or cloud keys', async () => {
+  it.skipIf(Boolean(LIVE_SKIP_REASON))(`executes all required Path A deterministic and Path B Liquid AI shell requests offline without Ollama, LM Studio, or cloud keys${LIVE_SKIP_REASON ? ` [SKIPPED: ${LIVE_SKIP_REASON}]` : ''}`, async () => {
     const state = createInitialShellState({
       initialCwd: REPO_ROOT,
       env: {
