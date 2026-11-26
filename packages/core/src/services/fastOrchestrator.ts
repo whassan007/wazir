@@ -786,6 +786,30 @@ export function matchTier0Intent(
 
   // Agent-malleable user custom commands (~/.wazir/commands/*.json or ~/.wazir/bin/*)
   if (sessionMode !== 'ai') {
+    const runMatch = /^run\s+([A-Za-z0-9._-]+)(?:\s+(.*))?$/i.exec(normalized);
+    if (runMatch) {
+      const cmdName = runMatch[1]!;
+      const restArgs = (runMatch[2] ?? '').trim();
+      const customCmd = getUserCustomCommand(cmdName, {
+        wazirHome: (context as { env?: NodeJS.ProcessEnv }).env?.WAZIR_HOME,
+        env: (context as { env?: NodeJS.ProcessEnv }).env,
+      });
+      if (customCmd && customCmd.mode !== 'ai') {
+        const expanded = expandUserCustomCommand(customCmd, restArgs);
+        return {
+          tier: 0,
+          handler: 'tier0-custom-command',
+          reason: `User custom command '${customCmd.name}' (${customCmd.source ?? 'manifest'})`,
+          confidence: 1,
+          normalizedInput: normalized,
+          requiresConfirmation: Boolean(customCmd.confirm),
+          tier0Kind: 'custom_command',
+          tier0Payload: expanded,
+          shellCommand: expanded,
+        };
+      }
+    }
+
     const firstSpace = normalized.search(/\s/);
     const firstToken = firstSpace === -1 ? normalized : normalized.slice(0, firstSpace);
     const restArgs = firstSpace === -1 ? '' : normalized.slice(firstSpace + 1).trim();
@@ -1077,8 +1101,13 @@ export function matchTier0Intent(
     };
   }
 
-  if (/^(?:wa\s+|wazir\s+)?models(?:\s+list)?(?:\s+--json)?$/i.test(normalized)) {
-    const args = normalized.replace(/^(?:(?:wa|wazir)\s+)?models\s*/i, '').trim();
+  if (
+    /^(?:wa\s+|wazir\s+)?models(?:\s+list)?(?:\s+--json)?$/i.test(normalized) ||
+    /^(?:(?:show|list|display|get)\s+(?:all\s+)?(?:available\s+|registered\s+|local\s+|configured\s+)?models|what\s+models\s+are\s+available\??)$/i.test(normalized)
+  ) {
+    const args = /^(?:wa\s+|wazir\s+)?models/i.test(normalized)
+      ? normalized.replace(/^(?:(?:wa|wazir)\s+)?models\s*/i, '').trim()
+      : '';
     return {
       tier: 0,
       handler: 'tier0-builtin',
@@ -1093,8 +1122,11 @@ export function matchTier0Intent(
     };
   }
 
-  if (/^(?:wa\s+|wazir\s+)?jobs(?:\s+(?:--json|--status\s+\S+|--mode\s+\S+))*$/i.test(normalized)) {
-    const args = normalized.replace(/^(?:(?:wa|wazir)\s+)?jobs\s*/i, '').trim();
+  const jobsNaturalMatch = /^(?:(?:show|list|display|get)\s+(?:all\s+)?(?:(running|active|paused|completed|failed)\s+)?jobs|what\s+jobs\s+are\s+running\??)$/i.exec(normalized);
+  if (/^(?:wa\s+|wazir\s+)?jobs(?:\s+(?:--json|--status\s+\S+|--mode\s+\S+))*$/i.test(normalized) || jobsNaturalMatch) {
+    const args = jobsNaturalMatch
+      ? (jobsNaturalMatch[1] || /what\s+jobs\s+are\s+running/i.test(normalized) ? '--status running' : '')
+      : normalized.replace(/^(?:(?:wa|wazir)\s+)?jobs\s*/i, '').trim();
     return {
       tier: 0,
       handler: 'tier0-builtin',
@@ -1149,8 +1181,13 @@ export function matchTier0Intent(
     };
   }
 
-  if (/^(?:wa\s+|wazir\s+)?fleet(?:\s+--json)?$/i.test(normalized)) {
-    const args = normalized.replace(/^(?:(?:wa|wazir)\s+)?fleet\s*/i, '').trim();
+  if (
+    /^(?:wa\s+|wazir\s+)?fleet(?:\s+--json)?$/i.test(normalized) ||
+    /^(?:(?:show|list|display|get)\s+(?:all\s+)?(?:available\s+|connected\s+|registered\s+)?(?:computers|hosts|nodes|fleet|machines)|(?:wa\s+|wazir\s+)?fleet\s+status(?:\s+--json)?|what\s+computers\s+are\s+available\??)$/i.test(normalized)
+  ) {
+    const args = /^(?:wa\s+|wazir\s+)?fleet/i.test(normalized)
+      ? normalized.replace(/^(?:(?:wa|wazir)\s+)?fleet(?:\s+status)?\s*/i, '').trim()
+      : '';
     return {
       tier: 0,
       handler: 'tier0-builtin',
