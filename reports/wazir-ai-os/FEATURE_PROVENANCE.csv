@@ -1,0 +1,8 @@
+subsystem,authoritative_source,status,notes
+Native Shell UI & ModalController,apps/shell/ui/index.html; apps/shell/ui/app.js; apps/shell/ui/styles.css,VERIFIED_OPERATIONAL,Single ModalController; externalized CSP-compliant JS; kernel CWD sync
+Native Shell PTY Backend,apps/shell/src-tauri/src/main.rs,VERIFIED_OPERATIONAL,portable-pty; discover_user_shell; detect_process_cwd; portable resolve_wa_binary
+4-Tier FastOrchestrator,packages/core/src/services/fastOrchestrator.ts,VERIFIED_OPERATIONAL,Tier 0/1/2/3 deterministic + AI routing
+Embedded Liquid AI Router,packages/core/src/services/liquidShellOrchestrator.ts,PARTIAL,Checksum verified; loopback llama-server blocked in sandbox
+Coordination Fabric,packages/core/src/services/coordinationFabric.ts,VERIFIED_OPERATIONAL,NatsWireTransport accurately typed as nats-core; durable local outbox
+Ubuntu GNOME Integration,os/wazir-os-ubuntu/gnome/*; os/wazir-os-ubuntu/nautilus/*,IMPLEMENTED_NOT_VERIFIED,Packaged in .deb; requires live Ubuntu GNOME VM for GUI verification
+Debian Packaging,.deb via scripts/build-deb.mjs,VERIFIED_OPERATIONAL,Fixed wazir-worker.service to wa worker start; added wazir-shell launcher & desktop entries

@@ -1,0 +1,15 @@
+{
+  "timestamp": "2026-11-25T23:10:17-08:00",
+  "build": "PASS",
+  "typecheck": "PASS",
+  "checkDist": "PASS",
+  "versionCheck": "PASS (0.4.2)",
+  "rustTests": { "passed": 4, "failed": 0 },
+  "vitest": {
+    "filesPassed": 10,
+    "filesFailed": 4,
+    "testsPassed": 86,
+    "testsFailed": 10,
+    "note": "4 loopback TCP / llama-server tests failed with connect EPERM 127.0.0.1 in terminal sandbox"
+  }
+}

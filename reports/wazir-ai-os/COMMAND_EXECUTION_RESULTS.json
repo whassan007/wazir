@@ -1,0 +1,100 @@
+[
+  {
+    "input": "hello",
+    "durationMs": 14,
+    "status": "clarification",
+    "tier": 1,
+    "output": "[wazir-shell] Ambiguous input \"hello\". Prefix with \"! \" to run in native shell (/bin/zsh) or \"? \" to ask Wazir AI."
+  },
+  {
+    "input": "run hello",
+    "durationMs": 7,
+    "status": "clarification",
+    "tier": 1,
+    "output": "[wazir-shell] Ambiguous input \"run hello\". Prefix with \"! \" to run in native shell (/bin/zsh) or \"? \" to ask Wazir AI."
+  },
+  {
+    "input": "pwd",
+    "durationMs": 8,
+    "status": "success",
+    "tier": 1,
+    "output": "sent to pty: pwd"
+  },
+  {
+    "input": "ls",
+    "durationMs": 5,
+    "status": "success",
+    "tier": 1,
+    "output": "sent to pty: ls"
+  },
+  {
+    "input": "ls -la",
+    "durationMs": 10,
+    "status": "success",
+    "tier": 1,
+    "output": "sent to pty: ls -la"
+  },
+  {
+    "input": "git status",
+    "durationMs": 7,
+    "status": "success",
+    "tier": 1,
+    "output": "sent to pty: git status"
+  },
+  {
+    "input": "echo hello",
+    "durationMs": 30,
+    "status": "success",
+    "tier": 1,
+    "output": "sent to pty: echo hello"
+  },
+  {
+    "input": "what time is it",
+    "durationMs": 9,
+    "status": "success",
+    "tier": 0,
+    "output": "11:09 PM PST"
+  },
+  {
+    "input": "what is the date",
+    "durationMs": 8,
+    "status": "success",
+    "tier": 0,
+    "output": "Wednesday, November 25, 2026"
+  },
+  {
+    "input": "version",
+    "durationMs": 9,
+    "status": "success",
+    "tier": 0,
+    "output": "Wazir v0.4.2"
+  },
+  {
+    "input": "wa --version",
+    "durationMs": 13,
+    "status": "success",
+    "tier": 0,
+    "output": "Wazir v0.4.2"
+  },
+  {
+    "input": "show available models",
+    "durationMs": 7,
+    "status": "success",
+    "tier": 0,
+    "output": "No cached models found. Run `wa models --refresh` to discover local/fleet models."
+  },
+  {
+    "input": "show available computers",
+    "durationMs": 8,
+    "status": "success",
+    "tier": 0,
+    "output": "Fleet: local (1 computer). No remote hosts configured."
+  },
+  {
+    "input": "show running jobs",
+    "durationMs": 330,
+    "status": "success",
+    "tier": 0,
+    "output": "No running or recorded jobs."
+  }
+]

@@ -1,0 +1,8 @@
+feature,status,evidence
+Wazir Shell ModalController,VERIFIED_OPERATIONAL,apps/shell/ui/app.js + native binary run
+Wazir Shell PTY & Kernel CWD Sync,VERIFIED_OPERATIONAL,apps/shell/src-tauri/src/main.rs (detect_process_cwd + pty_get_info)
+4-Tier FastOrchestrator,VERIFIED_OPERATIONAL,packages/core/tests/fastOrchestrator.test.ts (16/16)
+Coordination Fabric (nats-core),VERIFIED_OPERATIONAL,packages/core/tests/coordinationFabric.test.ts (4/4)
+Debian Packaging (.deb),VERIFIED_OPERATIONAL,node scripts/build-deb.mjs -> dist/deb/wazir_0.4.2_all.deb
+GNOME Search & Nautilus,IMPLEMENTED_NOT_VERIFIED,os/wazir-os-ubuntu/gnome/* & nautilus/*
+Ubuntu ISO Autoinstall,IMPLEMENTED_NOT_VERIFIED,os/wazir-os-ubuntu/image/ubuntu-26.04.1-autoinstall.yaml
