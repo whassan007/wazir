@@ -1,0 +1,9 @@
+Linux jeston 6.8.12-1029-tegra #1 SMP PREEMPT Thu Nov 12 22:18:33 PST 2026 aarch64 aarch64 aarch64 GNU/Linux
+v24.22.2
+bubblewrap 0.9.0
+bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted
+bwrap_ns_exit=1
+npm warn Unknown project config "link-workspace-packages". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown project config "prefer-workspace-packages". This will stop working in the next major version of npm. See `npm help npmrc` for supported config options.
+JSON report written to /home/wael/wazir-v044/J2/reports/v0.4.4/logs/J2-core-linux.json
+J2_EXIT=0

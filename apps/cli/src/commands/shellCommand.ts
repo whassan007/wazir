@@ -2534,6 +2534,7 @@ export async function runMenuCli(options: {
 }
 
 export function registerShellAndMetaCommands(program: Command, cliVersion?: string): void {
+  if (program.commands.some((c) => c.name() === 'shell')) return;
   const effectiveVersion = cliVersion && cliVersion !== '0.3.1' ? cliVersion : resolveAuthoritativePackageVersion();
 
   program

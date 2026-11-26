@@ -133,8 +133,11 @@ for (const buildScriptRel of ['scripts/build-deb.mjs', 'scripts/build-rpm.mjs'])
   if (bs.includes('/usr/bin/wa worker start') || bs.includes('/usr/bin/wa api start')) {
     parityProblems.push(`${buildScriptRel} contains broken systemd ExecStart (wa worker/api start)`);
   }
-  if (!bs.includes('/usr/bin/wa improve start --foreground --continuous') || !bs.includes('/usr/bin/wa dashboard --no-open')) {
-    parityProblems.push(`${buildScriptRel} missing valid systemd ExecStart CLI commands`);
+  if (!bs.includes('/usr/bin/node /usr/lib/wazir/wazir-worker.js') && !bs.includes('/usr/bin/wa improve start --foreground --continuous')) {
+    parityProblems.push(`${buildScriptRel} missing valid worker systemd ExecStart`);
+  }
+  if (!bs.includes('/usr/bin/wa dashboard --no-open')) {
+    parityProblems.push(`${buildScriptRel} missing valid API systemd ExecStart`);
   }
 }
 

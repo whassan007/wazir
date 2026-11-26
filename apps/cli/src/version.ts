@@ -32,7 +32,7 @@ export function resolveAuthoritativePackageVersion(): string {
       // try next candidate
     }
   }
-  return '0.4.3';
+  return '0.4.4';
 }
 
 export interface BuildInfo {

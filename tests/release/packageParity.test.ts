@@ -99,7 +99,10 @@ describe('Release Package Parity & Lineage Guardrails', () => {
       const scriptContent = readFileSync(path.join(rootDir, scriptRel), 'utf8');
       expect(scriptContent, `${scriptRel} must not use nonexistent wa worker start`).not.toContain('/usr/bin/wa worker start');
       expect(scriptContent, `${scriptRel} must not use nonexistent wa api start`).not.toContain('/usr/bin/wa api start');
-      expect(scriptContent, `${scriptRel} worker ExecStart`).toContain('/usr/bin/wa improve start --foreground --continuous');
+      const hasValidWorker =
+        scriptContent.includes('/usr/bin/node /usr/lib/wazir/wazir-worker.js') ||
+        scriptContent.includes('/usr/bin/wa improve start --foreground --continuous');
+      expect(hasValidWorker, `${scriptRel} worker ExecStart`).toBe(true);
       expect(scriptContent, `${scriptRel} api ExecStart`).toContain('/usr/bin/wa dashboard --no-open --host 0.0.0.0 --port 4800');
     }
 

@@ -44,8 +44,10 @@ if (!commit) {
 const buildDate = process.env.WAZIR_BUILD_DATE || new Date().toISOString();
 
 const entryPoint = resolve(rootDir, 'apps/cli/src/index.ts');
+const workerEntryPoint = resolve(rootDir, 'apps/worker/src/index.ts');
 const outDir = resolve(rootDir, 'bin');
 const outFile = resolve(outDir, 'wa.js');
+const workerOutFile = resolve(outDir, 'wazir-worker.js');
 
 if (!existsSync(outDir)) {
   mkdirSync(outDir, { recursive: true });
@@ -93,6 +95,36 @@ try {
       // best-effort on Windows
     }
     console.log(`✓ Standalone CLI bundle created at: ${outFile}`);
+
+    if (existsSync(workerEntryPoint)) {
+      console.log('==> Bundling Wazir Worker into standalone executable: bin/wazir-worker.js');
+      await esbuild.build({
+        entryPoints: [workerEntryPoint],
+        bundle: true,
+        platform: 'node',
+        target: 'node22.13',
+        format: 'cjs',
+        outfile: workerOutFile,
+        external: ['pg-native', '@napi-rs/keyring', 'node-pty'],
+        banner: { js: RUNTIME_GUARD },
+        sourcemap: true,
+        minifyWhitespace: true,
+        minifySyntax: true,
+        minifyIdentifiers: false,
+        logLevel: 'info',
+        define: {
+          '__WAZIR_VERSION__': JSON.stringify(version),
+          '__WAZIR_COMMIT__': JSON.stringify(commit),
+          '__WAZIR_BUILD_DATE__': JSON.stringify(buildDate),
+        },
+      });
+      try {
+        chmodSync(workerOutFile, 0o755);
+      } catch {
+        // best-effort on Windows
+      }
+      console.log(`✓ Standalone Worker bundle created at: ${workerOutFile}`);
+    }
   } catch (error) {
     console.error('Bundle failed:', error);
     process.exit(1);

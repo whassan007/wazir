@@ -1,5 +1,5 @@
 Name:           wazir
-Version:        0.4.3
+Version:        0.4.4
 Release:        1%{?dist}
 Summary:        Autonomous multi-agent AI coding harness and resource-governed fleet orchestrator
 License:        AGPL-3.0-only
@@ -74,6 +74,9 @@ fi
 %attr(0750, wazir, wazir) %dir %{_localstatedir}/log/wazir
 
 %changelog
+* Thu Nov 26 2026 Wael Hassan <wael@wazir.dev> - 0.4.4-1
+- Ship standalone worker bundle bin/wazir-worker.js, fix NatsWireTransport PONG waiter, add ubuntu-acceptance.sh, and reconcile Wazir OS + CLI/Linux tests
+
 * Thu Nov 26 2026 Wael Hassan <wael@wazir.dev> - 0.4.3-1
 - Per-arch Linux arm64 .deb with native wazir-shell-bin, GNOME/Nautilus C1-C3 hardening, Omarchy theme/palette/commands, and multi-node coordination fabric qualification
 

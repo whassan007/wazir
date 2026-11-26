@@ -228,9 +228,17 @@ if (shipsGui) {
   chmodSync(dst, 0o755);
 }
 
-// /usr/lib/wazir/wa.js
+// /usr/lib/wazir/wa.js & /usr/lib/wazir/wazir-worker.js
 writeFileSync(path.join(stagingDir, 'usr/lib/wazir/wa.js'), readFileSync(waBundle, 'utf8'), 'utf8');
 chmodSync(path.join(stagingDir, 'usr/lib/wazir/wa.js'), 0o755);
+const workerBundle = path.resolve(rootDir, 'bin/wazir-worker.js');
+if (!existsSync(workerBundle)) {
+  execSync('node scripts/bundle.mjs', { cwd: rootDir, stdio: 'inherit' });
+}
+if (existsSync(workerBundle)) {
+  writeFileSync(path.join(stagingDir, 'usr/lib/wazir/wazir-worker.js'), readFileSync(workerBundle, 'utf8'), 'utf8');
+  chmodSync(path.join(stagingDir, 'usr/lib/wazir/wazir-worker.js'), 0o755);
+}
 
 // /usr/lib/wazir/package.json
 const minPkg = {
@@ -246,7 +254,7 @@ writeFileSync(path.join(stagingDir, 'usr/lib/wazir/package.json'), JSON.stringif
 // 4. Systemd services (never auto-enabled by maintainer scripts; self-improvement
 // has no unit at all and is only started explicitly by the user).
 const systemdWorker = readFileSync(path.resolve(rootDir, 'scripts/systemd/wazir-worker.service'), 'utf8')
-  .replace('/usr/bin/node /opt/wazir/apps/worker/dist/index.js', '/usr/bin/wa improve start --foreground --continuous')
+  .replace('/usr/bin/node /opt/wazir/apps/worker/dist/index.js', '/usr/bin/node /usr/lib/wazir/wazir-worker.js')
   .replace('WorkingDirectory=/opt/wazir', 'WorkingDirectory=/var/lib/wazir')
   .replace('ReadWritePaths=/opt/wazir', 'ReadWritePaths=/var/lib/wazir');
 

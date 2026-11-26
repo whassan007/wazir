@@ -45,7 +45,7 @@ globalStartupProfiler.mark('cli.entry');
 // only ever handled inside the TUI, and only while it was running.
 installGlobalCrashHandlers();
 
-export const CLI_VERSION = typeof __WAZIR_VERSION__ === 'string' ? __WAZIR_VERSION__ : '0.4.3';
+export const CLI_VERSION = typeof __WAZIR_VERSION__ === 'string' ? __WAZIR_VERSION__ : '0.4.4';
 
 /**
  * Zero-overhead fast path for version flags (`--version`, `-V`, `version`, `version --json`).
