@@ -56,7 +56,7 @@ export interface CoordinationEventEnvelope<TPayload = Record<string, unknown>> {
   untrusted_peer_input?: boolean;
 }
 
-export type CoordinationTransportKind = 'in-process' | 'durable-local' | 'nats-jetstream';
+export type CoordinationTransportKind = 'in-process' | 'durable-local' | 'nats-core' | 'nats-jetstream';
 
 export type CircuitBreakerState = 'closed' | 'open' | 'half-open';
 

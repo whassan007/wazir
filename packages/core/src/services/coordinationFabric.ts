@@ -176,10 +176,12 @@ interface NatsSubscriptionRecord {
 }
 
 /**
- * Zero-dependency NATS text-wire transport over `node:net`.
+ * Zero-dependency NATS Core text-wire transport (`PUB`/`SUB`) over `node:net`.
+ * Provides at-most-once wire delivery backed by local outbox durability; does not
+ * implement server-acknowledged JetStream streams.
  */
 export class NatsWireTransport implements CoordinationTransportAdapter {
-  readonly kind: CoordinationTransportKind = 'nats-jetstream';
+  readonly kind: CoordinationTransportKind = 'nats-core';
   private readonly host: string;
   private readonly port: number;
   private readonly subjectPrefix: string;
@@ -1539,7 +1541,7 @@ export class CoordinationFabric {
     const circuitState = this.currentCircuitState();
 
     const transportKind: CoordinationTransportKind =
-      this.transport?.kind ?? (this.natsUrl ? 'nats-jetstream' : this.fabricDir || this.store ? 'durable-local' : 'in-process');
+      this.transport?.kind ?? (this.natsUrl ? 'nats-core' : this.fabricDir || this.store ? 'durable-local' : 'in-process');
 
     const { p50, p95 } = computePercentiles(this.latencySamples);
     let totalPublished = this.totalEventsPublished;
@@ -1556,7 +1558,7 @@ export class CoordinationFabric {
     return {
       healthy: !this.closed && circuitState !== 'open',
       transport: transportKind,
-      natsConfigured: Boolean(this.natsUrl || this.transport?.kind === 'nats-jetstream'),
+      natsConfigured: Boolean(this.natsUrl || this.transport?.kind === 'nats-core' || this.transport?.kind === 'nats-jetstream'),
       natsConnected: this.transport?.isConnected() ?? false,
       circuitState,
       outboxPending,
