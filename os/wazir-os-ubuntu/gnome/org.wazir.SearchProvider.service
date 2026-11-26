@@ -1,3 +1,4 @@
 [D-BUS Service]
 Name=org.wazir.SearchProvider
 Exec=/usr/libexec/wazir-gnome-search.py
+SystemdService=wazir-gnome-search.service
