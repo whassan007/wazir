@@ -5,13 +5,113 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{Emitter, Manager, State};
 use tauri_plugin_opener::OpenerExt;
 
 const MAX_PTY_SESSIONS: usize = 32;
 const DIAGNOSTIC_NOTICE_VERSION: &str = "2026-11-20.1";
+
+const USAGE: &str = "Usage: wazir-shell [--cwd <dir>] [--attach <path>]... [-c <input>]\n\n\
+Options:\n\
+  --cwd <dir>        Working directory for the initial tab\n\
+  --attach <path>    Attach a file/directory to the request (repeatable; passed as a structured list)\n\
+  -c, --command <s>  Route <s> through the Wazir Shell router in a new tab (never /bin/sh -c)\n\
+  -h, --help         Show this help and exit\n\
+  -V, --version      Show version and exit\n";
+
+/// Contract C1 launch arguments (reports/v0.4.3/INTEGRATION-CONTRACTS.md).
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize)]
+struct LaunchArgs {
+    cwd: Option<String>,
+    attachments: Vec<String>,
+    command: Option<String>,
+    #[serde(skip)]
+    help: bool,
+    #[serde(skip)]
+    version: bool,
+}
+
+static LAUNCH_ARGS: OnceLock<LaunchArgs> = OnceLock::new();
+
+/// Parses `wazir-shell [--cwd <dir>] [--attach <path>]... [-c <input>]`.
+/// `args` excludes argv[0]. Values are taken verbatim as single argv elements;
+/// nothing is ever joined or shell-interpreted.
+fn parse_launch_args<I, S>(args: I) -> Result<LaunchArgs, String>
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+{
+    let mut out = LaunchArgs::default();
+    let mut iter = args.into_iter().map(Into::into);
+    let mut only_attachments = false;
+    while let Some(arg) = iter.next() {
+        if only_attachments {
+            out.attachments.push(arg);
+            continue;
+        }
+        let (flag, inline) = match arg.split_once('=') {
+            Some((f, v)) if f.starts_with("--") => (f.to_string(), Some(v.to_string())),
+            _ => (arg.clone(), None),
+        };
+        let mut take_value = |name: &str| -> Result<String, String> {
+            match inline.clone() {
+                Some(v) => Ok(v),
+                None => iter.next().ok_or_else(|| format!("missing value for {name}")),
+            }
+        };
+        match flag.as_str() {
+            "--cwd" => out.cwd = Some(take_value("--cwd")?),
+            "--attach" => out.attachments.push(take_value("--attach")?),
+            "-c" | "--command" => out.command = Some(take_value("-c")?),
+            "-h" | "--help" => out.help = true,
+            "-V" | "--version" => out.version = true,
+            "--" => only_attachments = true,
+            other if other.starts_with('-') => return Err(format!("unknown option '{other}'")),
+            other => return Err(format!("unexpected argument '{other}' (use --attach <path> or -c <input>)")),
+        }
+    }
+    if let Some(cwd) = out.cwd.as_deref() {
+        if cwd.trim().is_empty() {
+            return Err("--cwd must not be empty".to_string());
+        }
+    }
+    if out.attachments.iter().any(|a| a.is_empty()) {
+        return Err("--attach path must not be empty".to_string());
+    }
+    Ok(out)
+}
+
+/// Resolves relative `--cwd` / `--attach` paths against the process cwd (and the
+/// launch cwd for attachments) so the UI receives absolute paths.
+fn resolve_launch_paths(mut args: LaunchArgs, process_cwd: &Path) -> Result<LaunchArgs, String> {
+    let base = match args.cwd.as_deref() {
+        Some(dir) => {
+            let p = process_cwd.join(dir);
+            if !p.is_dir() {
+                return Err(format!("--cwd '{dir}' is not a directory"));
+            }
+            let canon = p.canonicalize().unwrap_or(p);
+            args.cwd = Some(canon.to_string_lossy().to_string());
+            canon
+        }
+        None => process_cwd.to_path_buf(),
+    };
+    args.attachments = args
+        .attachments
+        .iter()
+        .map(|a| {
+            let p = base.join(a);
+            p.canonicalize().unwrap_or(p).to_string_lossy().to_string()
+        })
+        .collect();
+    Ok(args)
+}
+
+fn launch_args() -> LaunchArgs {
+    LAUNCH_ARGS.get().cloned().unwrap_or_default()
+}
 
 struct PtySession {
     master: Box<dyn MasterPty + Send>,
@@ -463,12 +563,18 @@ async fn run_wazir_ai_task(
     cwd: Option<String>,
     model: Option<String>,
     permission_mode: Option<String>,
+    attachments: Option<Vec<String>>,
 ) -> Result<String, String> {
     let trimmed = prompt.trim().to_string();
     if trimmed.is_empty() {
         return Err("AI prompt must not be empty".to_string());
     }
     let mut args = vec!["shell".to_string(), "-c".to_string(), trimmed];
+    // Each attachment is its own argv element (contract C1); never interpolated into the prompt.
+    for path in attachments.unwrap_or_default().into_iter().filter(|p| !p.is_empty()) {
+        args.push("--attach".to_string());
+        args.push(path);
+    }
     if let Some(m) = model.as_deref().map(str::trim).filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("auto")) {
         args.push("--model".to_string());
         args.push(m.to_string());
@@ -854,9 +960,11 @@ fn get_about_info() -> AboutInfo {
 
 #[tauri::command]
 fn get_shell_bootstrap() -> Result<serde_json::Value, String> {
-    let cwd = std::env::current_dir()
-        .ok()
-        .and_then(|p| p.to_str().map(String::from))
+    let launch = launch_args();
+    let cwd = launch
+        .cwd
+        .clone()
+        .or_else(|| std::env::current_dir().ok().and_then(|p| p.to_str().map(String::from)))
         .or_else(|| std::env::var("HOME").ok())
         .unwrap_or_else(|| ".".to_string());
     let custom_commands = list_wazir_custom_commands().unwrap_or_default();
@@ -872,6 +980,7 @@ fn get_shell_bootstrap() -> Result<serde_json::Value, String> {
         "settings": read_shell_settings(),
         "custom_commands": custom_commands,
         "verify_mode": verify_dir.is_some(),
+        "launch": launch,
     }))
 }
 
@@ -998,6 +1107,31 @@ fn exit_application(app: tauri::AppHandle, code: i32) {
 }
 
 fn main() {
+    let parsed = match parse_launch_args(std::env::args().skip(1)) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("wazir-shell: {e}\n\n{USAGE}");
+            std::process::exit(2);
+        }
+    };
+    if parsed.help {
+        print!("{USAGE}");
+        return;
+    }
+    if parsed.version {
+        println!("wazir-shell {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+    let process_cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let resolved = match resolve_launch_paths(parsed, &process_cwd) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("wazir-shell: {e}");
+            std::process::exit(2);
+        }
+    };
+    let _ = LAUNCH_ARGS.set(resolved);
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(ShellState::default())
@@ -1106,6 +1240,9 @@ fn main() {
 mod tests {
     use super::*;
 
+    /// Tests that mutate process-global WAZIR_HOME must not run concurrently.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
     #[test]
     fn discovers_user_shell_and_node_binary() {
         let shell = discover_user_shell();
@@ -1124,6 +1261,7 @@ mod tests {
 
     #[test]
     fn persists_consent_and_purges_diagnostics_on_decline() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let temp_home = std::env::temp_dir().join(format!("wazir-shell-consent-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&temp_home);
         std::fs::create_dir_all(&temp_home).unwrap();
@@ -1148,6 +1286,7 @@ mod tests {
 
     #[test]
     fn persists_settings_theme_and_custom_commands_in_isolated_home() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let temp_home = std::env::temp_dir().join(format!("wazir-shell-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&temp_home);
         std::env::set_var("WAZIR_HOME", &temp_home);
@@ -1185,5 +1324,43 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&temp_home);
         std::env::remove_var("WAZIR_HOME");
+    }
+
+    #[test]
+    fn parses_c1_launch_argv() {
+        let a = parse_launch_args(["--cwd", "/tmp", "--attach", "a b.txt", "--attach=$(rm -rf ~).md", "-c", "summarize these; echo pwned"]).unwrap();
+        assert_eq!(a.cwd.as_deref(), Some("/tmp"));
+        assert_eq!(a.attachments, vec!["a b.txt".to_string(), "$(rm -rf ~).md".to_string()]);
+        assert_eq!(a.command.as_deref(), Some("summarize these; echo pwned"));
+        assert!(!a.help);
+
+        let empty = parse_launch_args(Vec::<String>::new()).unwrap();
+        assert_eq!(empty, LaunchArgs::default());
+
+        let dashdash = parse_launch_args(["--command", "explain", "--", "-weird-name", "x"]).unwrap();
+        assert_eq!(dashdash.command.as_deref(), Some("explain"));
+        assert_eq!(dashdash.attachments, vec!["-weird-name".to_string(), "x".to_string()]);
+
+        assert!(parse_launch_args(["--help"]).unwrap().help);
+        assert!(parse_launch_args(["--cwd"]).is_err());
+        assert!(parse_launch_args(["-c"]).is_err());
+        assert!(parse_launch_args(["--bogus"]).is_err());
+        assert!(parse_launch_args(["stray"]).is_err());
+        assert!(parse_launch_args(["--attach", ""]).is_err());
+    }
+
+    #[test]
+    fn resolves_launch_paths_against_cwd() {
+        let base = std::env::temp_dir().join(format!("wazir-shell-argv-test-{}", std::process::id()));
+        std::fs::create_dir_all(base.join("sub")).unwrap();
+        let canon = base.canonicalize().unwrap();
+        let a = parse_launch_args(["--cwd", "sub", "--attach", "f.txt", "--attach", "/abs/x"]).unwrap();
+        let r = resolve_launch_paths(a, &canon).unwrap();
+        assert_eq!(r.cwd.as_deref(), Some(canon.join("sub").to_str().unwrap()));
+        assert_eq!(r.attachments[0], canon.join("sub").join("f.txt").to_string_lossy());
+        assert_eq!(r.attachments[1], "/abs/x");
+        let bad = parse_launch_args(["--cwd", "does-not-exist"]).unwrap();
+        assert!(resolve_launch_paths(bad, &canon).is_err());
+        let _ = std::fs::remove_dir_all(&base);
     }
 }
