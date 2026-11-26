@@ -1,0 +1,33 @@
+
+ RUN  v2.1.9 /Users/wael/Code/Wazir-v043/agent-05
+
+stdout | packages/core/tests/coordinationFabric.natsLive.test.ts > CoordinationFabric over a live nats-server (opt-in) > buffers to the outbox while the broker is down, drains after restart, and an idempotent consumer applies each effect once
+[nats-live 2026-11-26T07:39:20.311Z] consumer connected to nats://127.0.0.1:14222; server="2.10.29"
+
+stdout | packages/core/tests/coordinationFabric.natsLive.test.ts > CoordinationFabric over a live nats-server (opt-in) > buffers to the outbox while the broker is down, drains after restart, and an idempotent consumer applies each effect once
+[nats-live 2026-11-26T07:39:20.353Z] phase 1: 20 delivered and consumed
+[nats-live 2026-11-26T07:39:20.465Z] docker stop wazir-nats-v043: wazir-nats-v043
+
+stdout | packages/core/tests/coordinationFabric.natsLive.test.ts > CoordinationFabric over a live nats-server (opt-in) > buffers to the outbox while the broker is down, drains after restart, and an idempotent consumer applies each effect once
+[nats-live 2026-11-26T07:39:20.511Z] phase 2: broker down; outbox undelivered=20 delivered=20 dlq=0
+
+stdout | packages/core/tests/coordinationFabric.natsLive.test.ts > CoordinationFabric over a live nats-server (opt-in) > buffers to the outbox while the broker is down, drains after restart, and an idempotent consumer applies each effect once
+[nats-live 2026-11-26T07:39:20.581Z] docker start wazir-nats-v043: wazir-nats-v043
+
+stdout | packages/core/tests/coordinationFabric.natsLive.test.ts > CoordinationFabric over a live nats-server (opt-in) > buffers to the outbox while the broker is down, drains after restart, and an idempotent consumer applies each effect once
+[nats-live 2026-11-26T07:39:20.682Z] consumer reconnected (SUB re-sent)
+
+stdout | packages/core/tests/coordinationFabric.natsLive.test.ts > CoordinationFabric over a live nats-server (opt-in) > buffers to the outbox while the broker is down, drains after restart, and an idempotent consumer applies each effect once
+[nats-live 2026-11-26T07:39:21.061Z] phase 3: outbox drained; status={"healthy":true,"transport":"nats-core","natsConfigured":true,"natsConnected":true,"circuitState":"closed","outboxPending":0,"outboxDeadLetters":0,"inboxPending":0,"dlqCount":0,"activeSubscriptions":0,"staleConsumers":[],"consumerLag":0,"activeLeases":0,"totalEventsPublished":40,"metrics":{"publishLatencyMsP50":0.2346,"publishLatencyMsP95":0.3722}}
+
+stdout | packages/core/tests/coordinationFabric.natsLive.test.ts > CoordinationFabric over a live nats-server (opt-in) > buffers to the outbox while the broker is down, drains after restart, and an idempotent consumer applies each effect once
+[nats-live 2026-11-26T07:39:21.118Z] RESULT: N=40 deliveries=42 uniqueEffects=40 duplicatesSuppressed=2
+
+ ✓ packages/core/tests/coordinationFabric.natsLive.test.ts (1 test) 900ms
+   ✓ CoordinationFabric over a live nats-server (opt-in) > buffers to the outbox while the broker is down, drains after restart, and an idempotent consumer applies each effect once 895ms
+
+ Test Files  1 passed (1)
+      Tests  1 passed (1)
+   Start at  23:39:20
+   Duration  1.10s (transform 44ms, setup 0ms, collect 46ms, tests 900ms, environment 0ms, prepare 24ms)
+

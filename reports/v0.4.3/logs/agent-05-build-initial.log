@@ -1,0 +1,617 @@
+
+> wazir@0.4.2 build
+> npm run build --workspaces --if-present && npm run bundle
+
+
+> @wazir/agents@0.4.2 build
+> tsc --build
+
+
+> @wazir/assurance@0.4.2 build
+> tsc --build
+
+
+> @wazir/core@0.4.2 build
+> tsc --build
+
+
+> @wazir/database@0.4.2 build
+> tsc --build
+
+
+> @wazir/evaluation@0.4.2 build
+> tsc --build
+
+
+> @wazir/goals@0.4.2 build
+> tsc --build
+
+
+> @wazir/memory@0.4.2 build
+> tsc --build
+
+
+> @wazir/models@0.4.2 build
+> tsc --build
+
+
+> @wazir/observability@0.4.2 build
+> tsc --build
+
+
+> @wazir/policies@0.4.2 build
+> tsc --build
+
+
+> @wazir/registry@0.4.2 build
+> tsc --build
+
+
+> @wazir/scheduler@0.4.2 build
+> tsc --build
+
+
+> @wazir/secrets@0.4.2 build
+> tsc --build
+
+
+> @wazir/shared@0.4.2 build
+> tsc
+
+
+> @wazir/tools@0.4.2 build
+> tsc --build
+
+
+> @wazir/workers@0.4.2 build
+> tsc --build
+
+
+> @wazir/runtimes-anthropic@0.4.2 build
+> tsc --build
+
+
+> @wazir/runtimes-google@0.4.2 build
+> tsc --build
+
+
+> @wazir/runtimes-interfaces@0.4.2 build
+> tsc --build
+
+
+> @wazir/runtimes-lmstudio@0.4.2 build
+> tsc --build
+
+
+> @wazir/runtimes-mlx@0.4.2 build
+> tsc --build
+
+
+> @wazir/runtimes-nvidia@0.4.2 build
+> tsc --build
+
+
+> @wazir/runtimes-ollama@0.4.2 build
+> tsc --build
+
+
+> @wazir/runtimes-openai@0.4.2 build
+> tsc --build
+
+
+> @wazir/api@0.4.2 build
+> tsc --build
+
+
+> @wazir/cli@0.4.2 build
+> tsc --build
+
+
+> @wazir/desktop@0.4.2 build
+> node -e "const { spawnSync } = require('node:child_process'); if (process.platform === 'linux' && spawnSync('pkg-config', ['--exists', 'dbus-1']).status !== 0) { if (process.env.WAZIR_SKIP_DESKTOP_NATIVE_BUILD === '1') { console.log('[@wazir/desktop] Skipping native Tauri build on headless Linux (WAZIR_SKIP_DESKTOP_NATIVE_BUILD=1)'); process.exit(0); } console.error('[@wazir/desktop] ERROR: native Tauri build requires dbus-1.pc and webkit2gtk on Linux'); process.exit(1); } const res = spawnSync('npx', ['--no-install', 'tauri', 'build', '--no-bundle'], { stdio: 'inherit', shell: true }); process.exit(res.status ?? 1);"
+
+        Info Looking up installed tauri packages to check mismatched versions...
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling unicode-ident v1.0.27
+   Compiling libc v0.2.190
+   Compiling serde_core v1.0.229
+   Compiling siphasher v1.0.4
+   Compiling icu_properties_data v2.3.0
+   Compiling icu_normalizer_data v2.3.0
+   Compiling fastrand v2.5.0
+   Compiling zmij v1.0.23
+   Compiling cfg-if v1.0.5
+   Compiling stable_deref_trait v1.2.1
+   Compiling shlex v2.0.1
+   Compiling memchr v2.8.3
+   Compiling find-msvc-tools v0.1.14
+   Compiling smallvec v1.16.3
+   Compiling serde v1.0.229
+   Compiling thiserror v2.0.21
+   Compiling itoa v1.0.18
+   Compiling phf_shared v0.13.1
+   Compiling cc v1.8.0
+   Compiling typeid v1.0.3
+   Compiling num-conv v0.2.2
+   Compiling time-core v0.1.9
+   Compiling writeable v0.6.4
+   Compiling litemap v0.8.3
+   Compiling erased-serde v0.4.10
+   Compiling phf_generator v0.13.1
+   Compiling strsim v0.11.1
+   Compiling serde_json v1.0.154
+   Compiling ident_case v1.0.1
+   Compiling bitflags v2.13.2
+   Compiling phf_codegen v0.13.1
+   Compiling utf8_iter v1.0.4
+   Compiling parking_lot_core v0.9.12
+   Compiling anyhow v1.0.104
+   Compiling scopeguard v1.2.0
+   Compiling new_debug_unreachable v1.0.6
+   Compiling precomputed-hash v0.1.1
+   Compiling getrandom v0.4.3
+   Compiling lock_api v0.4.14
+   Compiling winnow v1.0.4
+   Compiling toml_writer v1.1.3+spec-1.1.0
+   Compiling percent-encoding v2.3.2
+   Compiling autocfg v1.5.1
+   Compiling objc2 v0.6.5
+   Compiling log v0.4.34
+   Compiling version_check v0.9.5
+   Compiling dtoa v1.0.11
+   Compiling toml_parser v1.1.5+spec-1.1.0
+   Compiling form_urlencoded v1.2.2
+   Compiling tendril v0.5.1
+   Compiling selectors v0.38.0
+   Compiling dtoa-short v0.3.5
+   Compiling aho-corasick v1.1.5
+   Compiling camino v1.2.6
+   Compiling alloc-no-stdlib v3.0.0
+   Compiling objc2-encode v4.1.0
+   Compiling indexmap v1.9.3
+   Compiling regex-syntax v0.8.11
+   Compiling alloc-stdlib v0.3.0
+   Compiling servo_arc v0.4.3
+   Compiling schemars v0.8.22
+   Compiling bit-vec v0.8.0
+   Compiling deranged v0.5.9
+   Compiling equivalent v1.0.3
+   Compiling objc2-exception-helper v0.1.1
+   Compiling web-time v1.1.0
+   Compiling hashbrown v0.12.3
+   Compiling rustc-hash v2.1.3
+   Compiling crc32fast v1.5.2
+   Compiling powerfmt v0.2.1
+   Compiling syn v3.0.9
+   Compiling syn v2.0.119
+   Compiling string_cache_codegen v0.6.1
+   Compiling hashbrown v0.17.1
+   Compiling fnv v1.0.7
+   Compiling parking_lot v0.12.5
+   Compiling bit-set v0.8.0
+   Compiling brotli-decompressor v6.0.1
+   Compiling quick-xml v0.42.0
+   Compiling foldhash v0.2.0
+   Compiling string_cache v0.9.0
+   Compiling same-file v1.0.6
+   Compiling web_atoms v0.2.6
+   Compiling dyn-clone v1.0.20
+   Compiling dunce v1.0.5
+   Compiling tauri-utils v2.10.2
+   Compiling base64 v0.23.1
+   Compiling base64 v0.21.7
+   Compiling bytes v1.12.1
+   Compiling indexmap v2.14.2
+   Compiling walkdir v2.5.0
+   Compiling time v0.3.55
+   Compiling ctor v1.0.13
+   Compiling glob v0.3.4
+   Compiling simd-adler32 v0.3.10
+   Compiling generic-array v0.14.7
+   Compiling brotli v9.0.0
+   Compiling http v1.5.0
+   Compiling regex-automata v0.4.18
+   Compiling option-ext v0.2.0
+   Compiling adler2 v2.0.1
+   Compiling semver v1.0.28
+   Compiling serde_spanned v1.1.2
+   Compiling toml_datetime v1.1.2+spec-1.1.0
+   Compiling uuid v1.28.0
+   Compiling toml v1.1.8+spec-1.1.0
+   Compiling rustc_version v0.4.1
+   Compiling cfb v0.14.0
+   Compiling dirs-sys v0.5.0
+   Compiling serde-untagged v0.1.9
+   Compiling time-macros v0.2.32
+   Compiling heck v0.5.0
+   Compiling typenum v1.20.1
+   Compiling dirs v7.0.0
+   Compiling miniz_oxide v0.9.1
+   Compiling block2 v0.6.2
+   Compiling objc2-core-foundation v0.3.2
+   Compiling infer v0.22.0
+   Compiling embed-resource v3.0.12
+   Compiling crossbeam-utils v0.8.23
+   Compiling static_vcruntime v3.0.0
+   Compiling tauri-winres v0.3.6
+   Compiling flate2 v1.1.10
+   Compiling serde_derive_internals v0.29.1
+   Compiling miniz_oxide v0.8.9
+   Compiling fdeflate v0.3.7
+   Compiling cookie v0.18.2
+   Compiling synstructure v0.14.0
+   Compiling darling_core v0.24.1
+   Compiling regex v1.13.1
+   Compiling objc2-foundation v0.3.2
+   Compiling core-foundation-sys v0.8.7
+   Compiling raw-window-handle v0.6.2
+   Compiling core-foundation v0.10.1
+   Compiling phf_macros v0.13.1
+   Compiling derive_more-impl v2.1.1
+   Compiling schemars_derive v0.8.22
+   Compiling block-buffer v0.10.4
+   Compiling crypto-common v0.1.7
+   Compiling zerofrom-derive v0.1.8
+   Compiling yoke-derive v0.8.4
+   Compiling zerovec-derive v0.11.6
+   Compiling serde_derive v1.0.229
+   Compiling displaydoc v0.2.7
+   Compiling thiserror-impl v2.0.21
+   Compiling cssparser-macros v0.7.1
+   Compiling phf v0.13.1
+   Compiling derive_more v2.1.1
+   Compiling foreign-types-macros v0.2.4
+   Compiling cssparser v0.37.0
+   Compiling zerofrom v0.1.8
+   Compiling yoke v0.8.3
+   Compiling markup5ever v0.39.0
+   Compiling darling_macro v0.24.1
+   Compiling html5ever v0.39.0
+   Compiling zerovec v0.11.8
+   Compiling zerotrie v0.2.5
+   Compiling bitflags v1.3.2
+   Compiling darling v0.24.1
+   Compiling foreign-types-shared v0.3.1
+   Compiling foreign-types v0.5.0
+   Compiling serde_with_macros v3.24.0
+   Compiling png v0.17.16
+   Compiling tinystr v0.8.4
+   Compiling potential_utf v0.1.6
+   Compiling icu_collections v2.3.0
+   Compiling icu_locale_core v2.3.0
+   Compiling dom_query v0.28.0
+   Compiling crossbeam-channel v0.5.17
+   Compiling serde_with v3.24.0
+   Compiling digest v0.10.7
+   Compiling icu_provider v2.3.1
+   Compiling swift-rs v1.0.9
+   Compiling jsonptr v0.7.1
+   Compiling icu_properties v2.3.0
+   Compiling icu_normalizer v2.3.0
+   Compiling cargo-platform v0.1.9
+   Compiling json-patch v4.2.0
+   Compiling cargo_metadata v0.19.2
+   Compiling plist v1.10.1
+   Compiling objc2-quartz-core v0.3.2
+   Compiling cargo_toml v1.0.1
+   Compiling dpi v0.1.2
+   Compiling idna_adapter v1.2.2
+   Compiling objc2-app-kit v0.3.2
+   Compiling wry v0.57.0
+   Compiling idna v1.1.0
+   Compiling core-graphics-types v0.2.0
+   Compiling cpufeatures v0.2.17
+   Compiling url v2.5.8
+   Compiling once_cell v1.21.4
+   Compiling zerocopy v0.8.63
+   Compiling tauri-runtime v2.12.2
+   Compiling byteorder v1.5.0
+   Compiling ico v0.5.0
+   Compiling sha2 v0.10.9
+   Compiling urlpattern v0.6.0
+   Compiling core-graphics v0.25.0
+   Compiling png v0.18.1
+   Compiling dispatch2 v0.3.1
+   Compiling muda v0.20.0
+   Compiling tauri-runtime-wry v2.12.2
+   Compiling getrandom v0.3.4
+   Compiling keyboard-types v0.8.3
+   Compiling serialize-to-javascript-impl v0.1.2
+   Compiling getrandom v0.2.17
+   Compiling pin-project-lite v0.2.17
+   Compiling tokio v1.53.3
+   Compiling rand_core v0.6.4
+   Compiling serde_repr v0.1.21
+   Compiling embed_plist v1.2.2
+   Compiling mime v0.3.17
+   Compiling open v5.4.4
+   Compiling serialize-to-javascript v0.1.2
+   Compiling ppv-lite86 v0.2.21
+   Compiling rand_chacha v0.3.1
+   Compiling rand v0.8.8
+   Compiling objc2-web-kit v0.3.2
+   Compiling tao v0.37.1
+   Compiling window-vibrancy v0.8.1
+   Compiling tauri-build v2.7.3
+   Compiling tauri-plugin v2.7.2
+   Compiling tauri-codegen v2.7.3
+   Compiling tauri v2.12.4
+   Compiling tauri-plugin-opener v2.7.2
+   Compiling tauri-macros v2.7.3
+   Compiling wazir-desktop v0.4.2 (/Users/wael/Code/Wazir-v043/agent-05/apps/desktop/src-tauri)
+warning: function `check_pending_approvals` is never used
+   --> src/main.rs:367:4
+    |
+367 | fn check_pending_approvals(port: u16, token: &str) -> Vec<String> {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `wazir-desktop` (bin "wazir-desktop") generated 1 warning
+    Finished `release` profile [optimized] target(s) in 24.49s
+       Built application at: /Users/wael/Code/Wazir-v043/agent-05/apps/desktop/src-tauri/target/release/wazir-desktop
+
+> @wazir/shell@0.4.2 build
+> tauri build --no-bundle
+
+        Info Looking up installed tauri packages to check mismatched versions...
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling unicode-ident v1.0.27
+   Compiling serde_core v1.0.229
+   Compiling siphasher v1.0.4
+   Compiling icu_normalizer_data v2.4.0
+   Compiling icu_properties_data v2.4.0
+   Compiling zmij v1.0.23
+   Compiling fastrand v2.5.0
+   Compiling libc v0.2.191
+   Compiling stable_deref_trait v1.2.1
+   Compiling cfg-if v1.0.5
+   Compiling memchr v2.8.3
+   Compiling serde v1.0.229
+   Compiling smallvec v1.16.6
+   Compiling find-msvc-tools v0.1.15
+   Compiling shlex v2.0.1
+   Compiling itoa v1.0.19
+   Compiling thiserror v2.0.21
+   Compiling typeid v1.0.3
+   Compiling phf_shared v0.13.1
+   Compiling cc v1.11.3
+   Compiling num-conv v0.2.2
+   Compiling time-core v0.1.9
+   Compiling autocfg v1.5.1
+   Compiling serde_json v1.0.154
+   Compiling ident_case v1.0.1
+   Compiling writeable v0.6.4
+   Compiling phf_generator v0.13.1
+   Compiling litemap v0.8.3
+   Compiling utf_types v1.0.0
+   Compiling strsim v0.11.1
+   Compiling erased-serde v0.4.11
+   Compiling bitflags v2.13.2
+   Compiling parking_lot_core v0.9.12
+   Compiling anyhow v1.0.104
+   Compiling phf_codegen v0.13.1
+   Compiling utf8_iter v1.1.0
+   Compiling scopeguard v1.2.0
+   Compiling new_debug_unreachable v1.0.6
+   Compiling precomputed-hash v0.1.1
+   Compiling getrandom v0.4.3
+   Compiling winnow v1.0.5
+   Compiling log v0.4.35
+   Compiling lock_api v0.4.14
+   Compiling toml_writer v1.2.0+spec-1.1.0
+   Compiling percent-encoding v2.3.2
+   Compiling objc2 v0.6.5
+   Compiling dtoa v1.0.11
+   Compiling tendril v0.5.1
+   Compiling form_urlencoded v1.2.2
+   Compiling dtoa-short v0.3.5
+   Compiling indexmap v1.9.3
+   Compiling selectors v0.38.0
+   Compiling aho-corasick v1.1.5
+   Compiling toml_parser v1.1.5+spec-1.1.0
+   Compiling alloc-no-stdlib v3.0.0
+   Compiling regex-syntax v0.8.12
+   Compiling objc2-encode v4.1.0
+   Compiling camino v1.2.6
+   Compiling servo_arc v0.4.3
+   Compiling alloc-stdlib v0.3.0
+   Compiling fnv v1.0.7
+   Compiling deranged v0.5.9
+   Compiling rustc-hash v2.1.3
+   Compiling equivalent v1.0.3
+   Compiling bit-vec v0.8.0
+   Compiling syn v3.0.10
+   Compiling syn v2.0.119
+   Compiling string_cache_codegen v0.6.1
+   Compiling web-time v1.1.0
+   Compiling schemars v0.8.22
+   Compiling hashbrown v0.12.3
+   Compiling powerfmt v0.2.1
+   Compiling hashbrown v0.17.1
+   Compiling web_atoms v0.2.6
+   Compiling bit-set v0.8.0
+   Compiling brotli-decompressor v6.3.2
+   Compiling parking_lot v0.12.5
+   Compiling quick-xml v0.42.0
+   Compiling bytes v1.12.2
+   Compiling dyn-clone v1.0.20
+   Compiling string_cache v0.9.0
+   Compiling objc2-exception-helper v0.1.1
+   Compiling crc32fast v1.5.5
+   Compiling time v0.3.55
+   Compiling tauri-utils v2.10.4
+   Compiling indexmap v2.14.2
+   Compiling base64 v0.21.7
+   Compiling dunce v1.0.5
+   Compiling foldhash v0.2.0
+   Compiling same-file v1.0.6
+   Compiling base64 v0.23.1
+   Compiling walkdir v2.5.0
+   Compiling http v1.5.0
+   Compiling ctor v1.0.14
+   Compiling glob v0.3.4
+   Compiling semver v1.0.28
+   Compiling toml_datetime v1.1.3+spec-1.1.0
+   Compiling serde_spanned v1.1.3
+   Compiling uuid v1.29.3
+   Compiling regex-automata v0.4.19
+   Compiling brotli v9.1.3
+   Compiling toml v1.2.1+spec-1.1.0
+   Compiling simd-adler32 v0.3.10
+   Compiling cfb v0.14.0
+   Compiling serde-untagged v0.1.9
+   Compiling time-macros v0.2.32
+   Compiling typenum v1.20.1
+   Compiling heck v0.5.0
+   Compiling adler2 v2.0.1
+   Compiling version_check v0.9.5
+   Compiling infer v0.22.0
+   Compiling crossbeam-utils v0.8.23
+   Compiling cookie v0.18.2
+   Compiling hybrid-array v0.4.15
+   Compiling miniz_oxide v0.9.1
+   Compiling serde_derive_internals v0.29.1
+   Compiling block2 v0.6.2
+   Compiling objc2-core-foundation v0.3.2
+   Compiling synstructure v0.14.0
+   Compiling darling_core v0.24.1
+   Compiling core-foundation-sys v0.8.7
+   Compiling raw-window-handle v0.6.2
+   Compiling regex v1.13.2
+   Compiling core-foundation v0.10.1
+   Compiling objc2-foundation v0.3.2
+   Compiling flate2 v1.1.11
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling phf_macros v0.13.1
+   Compiling derive_more-impl v2.1.1
+   Compiling schemars_derive v0.8.22
+   Compiling zerofrom-derive v0.1.8
+   Compiling yoke-derive v0.8.4
+   Compiling zerovec-derive v0.11.7
+   Compiling serde_derive v1.0.229
+   Compiling displaydoc v0.2.7
+   Compiling thiserror-impl v2.0.21
+   Compiling phf v0.13.1
+   Compiling cssparser-macros v0.7.1
+   Compiling foreign-types-macros v0.2.4
+   Compiling derive_more v2.1.1
+   Compiling zerofrom v0.1.8
+   Compiling cssparser v0.37.0
+   Compiling miniz_oxide v0.8.9
+   Compiling fdeflate v0.3.7
+   Compiling yoke v0.8.4
+   Compiling markup5ever v0.39.0
+   Compiling html5ever v0.39.0
+   Compiling zerovec v0.11.9
+   Compiling zerotrie v0.2.5
+   Compiling foreign-types-shared v0.3.1
+   Compiling option-ext v0.2.0
+   Compiling darling_macro v0.24.1
+   Compiling const-oid v0.10.3
+   Compiling tinystr v0.8.5
+   Compiling potential_utf v0.1.6
+   Compiling darling v0.24.1
+   Compiling digest v0.11.3
+   Compiling icu_collections v2.4.0
+   Compiling icu_locale_core v2.4.0
+   Compiling dom_query v0.28.0
+   Compiling dirs-sys v0.5.0
+   Compiling serde_with_macros v3.25.0
+   Compiling foreign-types v0.5.0
+   Compiling crossbeam-channel v0.5.17
+   Compiling png v0.18.1
+   Compiling icu_provider v2.4.0
+   Compiling core-graphics-types v0.2.0
+   Compiling serde_with v3.25.0
+   Compiling icu_properties v2.4.0
+   Compiling icu_normalizer v2.4.0
+   Compiling swift-rs v1.0.9
+   Compiling jsonptr v0.7.1
+   Compiling cargo-platform v0.1.9
+   Compiling cargo_metadata v0.19.2
+   Compiling plist v1.10.4
+   Compiling json-patch v4.2.0
+   Compiling dpi v0.1.2
+   Compiling idna_adapter v1.2.2
+   Compiling idna v1.1.0
+   Compiling wry v0.57.3
+   Compiling rustc_version v0.4.1
+   Compiling url v2.5.8
+   Compiling cpufeatures v0.3.1
+   Compiling byteorder v1.5.0
+   Compiling tauri-runtime v2.12.4
+   Compiling ico v0.6.0
+   Compiling urlpattern v0.6.0
+   Compiling sha2 v0.11.1
+   Compiling embed-resource v3.0.12
+   Compiling core-graphics v0.25.0
+   Compiling dirs v7.0.0
+   Compiling dispatch2 v0.3.1
+   Compiling objc2-quartz-core v0.3.2
+   Compiling memoffset v0.6.5
+   Compiling muda v0.20.0
+   Compiling tauri-runtime-wry v2.12.5
+   Compiling thiserror v1.0.69
+   Compiling getrandom v0.3.4
+   Compiling tauri-winres v0.3.7
+   Compiling objc2-app-kit v0.3.2
+   Compiling keyboard-types v0.8.3
+   Compiling cargo_toml v1.0.1
+   Compiling thiserror-impl v1.0.69
+   Compiling serialize-to-javascript-impl v0.1.2
+   Compiling serial-core v0.4.0
+   Compiling termios v0.2.2
+   Compiling ioctl-rs v0.1.6
+   Compiling pin-project-lite v0.2.18
+   Compiling once_cell v1.21.4
+   Compiling static_vcruntime v3.0.0
+   Compiling tokio v1.54.1
+   Compiling serial-unix v0.4.0
+   Compiling serialize-to-javascript v0.1.2
+   Compiling serde_repr v0.1.21
+   Compiling mime v0.3.18
+   Compiling embed_plist v1.2.2
+   Compiling pin-utils v0.1.1
+   Compiling bitflags v1.3.2
+   Compiling serial v0.4.0
+   Compiling open v5.4.5
+   Compiling nix v0.25.1
+   Compiling downcast-rs v1.2.1
+   Compiling shell-words v1.1.1
+   Compiling filedescriptor v0.8.3
+   Compiling portable-pty v0.8.1
+   Compiling objc2-web-kit v0.3.2
+   Compiling tao v0.37.3
+   Compiling window-vibrancy v0.8.1
+   Compiling tauri-plugin v2.7.4
+   Compiling tauri-codegen v2.7.6
+   Compiling tauri-build v2.7.6
+   Compiling tauri v2.12.7
+   Compiling tauri-plugin-opener v2.7.3
+   Compiling tauri-macros v2.7.6
+   Compiling wazir-shell v0.4.2 (/Users/wael/Code/Wazir-v043/agent-05/apps/shell/src-tauri)
+    Finished `release` profile [optimized] target(s) in 29.18s
+       Built application at: /Users/wael/Code/Wazir-v043/agent-05/apps/shell/src-tauri/target/release/wazir-shell
+
+> @wazir/web@0.4.2 build
+> true
+
+
+> @wazir/worker@0.4.2 build
+> tsc
+
+
+> wazir@0.4.2 bundle
+> node scripts/bundle.mjs
+
+==> Bundling Wazir CLI into standalone executable: bin/wa.js
+
+  bin/wa.js      15.5mb ⚠️
+  bin/wa.js.map  33.7mb
+
+⚡ Done in 395ms
+✓ Standalone CLI bundle created at: /Users/wael/Code/Wazir-v043/agent-05/bin/wa.js

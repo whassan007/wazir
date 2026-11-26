@@ -6,7 +6,7 @@ Architecture: all
 Maintainer: Wazir Contributors <wazir@wazir.ai>
 Homepage: https://github.com/whassan007/wazir
 Depends: nodejs (>= 22.13.0) | nodejs-legacy (>= 22.13.0)
-Recommends: libwebkit2gtk-4.1-0, libgtk-3-0, libayatana-appindicator3-1, libsecret-1-0, libnotify-bin, xdg-utils
+Recommends: libwebkit2gtk-4.1-0, libgtk-3-0, libayatana-appindicator3-1, libsecret-1-0, libnotify-bin, xdg-utils, python3-dbus, python3-gi, python3-nautilus, dconf-cli
 Description: Autonomous multi-agent AI coding harness and resource-governed fleet orchestrator
  Wazir is a cross-platform, resource-governed autonomous agent orchestration platform.
  It enables scalable AI coding execution across local nodes, edge devices, and compute fleets,

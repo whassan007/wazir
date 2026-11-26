@@ -1,0 +1,11 @@
+
+ RUN  v2.1.9 /Users/wael/Code/Wazir-v043/agent-05
+
+ ✓ packages/core/tests/coordinationFabric.test.ts (7 tests) 206ms
+ ✓ apps/cli/tests/fabricCommands.test.ts (3 tests) 19ms
+
+ Test Files  2 passed (2)
+      Tests  10 passed (10)
+   Start at  23:37:51
+   Duration  1.69s (transform 210ms, setup 0ms, collect 977ms, tests 225ms, environment 0ms, prepare 80ms)
+

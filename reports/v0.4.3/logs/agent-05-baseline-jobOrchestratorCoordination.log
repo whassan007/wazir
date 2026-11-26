@@ -1,0 +1,6 @@
+$ git checkout d6ca44a -- packages/core/src apps/cli/src && npm run build && npx vitest run packages/core/tests/jobOrchestratorCoordination.test.ts
+build exit 0
+   × JobOrchestrator coordination fabric integration > acquires fenced resource leases, passes coordination client, and publishes lifecycle events 41ms
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+      Tests  1 failed (1)
+vitest exit 

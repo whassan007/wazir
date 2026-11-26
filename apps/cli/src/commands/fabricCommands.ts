@@ -286,6 +286,22 @@ export async function probeNatsTcp(
   });
 }
 
+/**
+ * Transport kinds implemented by the coordination fabric. `nats-core` is NATS Core PUB/SUB:
+ * at-most-once on the wire, with local-outbox durability on the producer and idempotency
+ * keys (`event_id` / `idempotency_key`) required on consumers. The legacy, never-implemented
+ * `nats-jetstream` value (from older status payloads or adapters) is mapped to `nats-core`.
+ */
+export type FabricTransportKind = 'in-process' | 'durable-local' | 'nats-core';
+
+export function normalizeFabricTransportKind(raw: unknown): FabricTransportKind | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const value = raw.trim().toLowerCase();
+  if (value === 'in-process' || value === 'durable-local' || value === 'nats-core') return value;
+  if (value === 'nats-jetstream' || value === 'jetstream' || value === 'nats') return 'nats-core';
+  return undefined;
+}
+
 async function getCoreExports(): Promise<Record<string, unknown>> {
   try {
     return (await import('@wazir/core')) as unknown as Record<string, unknown>;
@@ -1962,13 +1978,8 @@ export async function fabricStatusCommand(opts: { json?: boolean } = {}): Promis
       : readStaleConsumers(fabricDir);
 
     const transport =
-      typeof rawFabricStatus?.transport === 'string'
-        ? rawFabricStatus.transport
-        : rawNatsUrl
-          ? 'nats-jetstream'
-          : existsSync(fabricDir)
-            ? 'durable-local'
-            : 'in-process';
+      normalizeFabricTransportKind(rawFabricStatus?.transport) ??
+      (rawNatsUrl ? 'nats-core' : existsSync(fabricDir) ? 'durable-local' : 'in-process');
 
     const rawCircuit =
       (typeof rawFabricStatus?.circuitState === 'string' && rawFabricStatus.circuitState) ||
