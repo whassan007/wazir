@@ -10,6 +10,7 @@ import { parseAntigravityModelCatalog } from '../src/agentPreflight.js';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const WA_BIN = path.join(REPO_ROOT, 'bin/wa.js');
+const ROOT_VERSION = (JSON.parse(readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8')) as { version: string }).version;
 
 describe('Antigravity CLI 1.5+ & Wazir MCP host integration', () => {
   it('parses both agy 1.3 tab rows and agy 1.5+ spinner/space-aligned model catalogs safely', () => {
@@ -115,8 +116,7 @@ describe('Antigravity CLI 1.5+ & Wazir MCP host integration', () => {
       const textBlock = (statusRes.content as Array<{ type: string; text?: string }>)[0];
       expect(textBlock?.type).toBe('text');
       const parsed = JSON.parse(textBlock?.text ?? '{}');
-      const pkgVersion = JSON.parse(readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../package.json'), 'utf8')).version;
-      expect(parsed.summary.version).toBe(pkgVersion);
+      expect(parsed.summary.version).toBe(ROOT_VERSION);
       expect(Array.isArray(parsed.computers)).toBe(true);
     } finally {
       await client.close().catch(() => undefined);

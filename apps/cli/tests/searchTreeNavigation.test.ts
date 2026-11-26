@@ -63,6 +63,9 @@ function createMockEngine() {
   const services = Object.fromEntries(
     Object.entries(createExplicitEngine()).map(([k, v]) => [k, v && typeof v === 'object' ? inertService(v as any) : v]),
   );
+  // Plain (non-service) engine fields must be real values; the Proxy below would
+  // otherwise fabricate an inert service object for them (e.g. projectRoot).
+  (services as Record<string, unknown>).projectRoot = process.cwd();
   return new Proxy(services, {
     get(target, prop) {
       if (prop in target) return (target as any)[prop];

@@ -584,7 +584,8 @@ describe('Live CLI End-to-End Verification (wa chat 15-Step Verification)', () =
 
     expect(f.harness.tui.presentationMode).toBe('conversation');
     expect(cleanOutput).toContain('WAZIR');
-    expect(cleanOutput).toContain('Autonomous coding assistant');
+    // The ' Autonomous coding assistant · Ready …' subtitle was removed from the banner in 43aa8fb
+    // (Qwen Code TUI transplant); the header now shows WAZIR + workspace + model.
 
     // Step 2 Output & Verification
     // Models: <registered> registered, <available> available, <loaded> loaded

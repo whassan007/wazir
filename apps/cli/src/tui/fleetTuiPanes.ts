@@ -1116,15 +1116,21 @@ export function renderFleetOverviewPane(tui: any, cols: number, maxRows: number)
 
   for (const comp of computers) {
     const compRuntimes = runtimes.filter((r: any) => r.computerId === comp.id).map((r: any) => r.type);
+    // `hardware.gpu` is a GPUInfo object once normalized by ComputerRegistry; accept a
+    // bare string too (older payloads). Rendering the object directly showed "[object Object]".
+    const rawGpu = (comp.hardware as any)?.gpu;
+    const registeredGpuModel: string | undefined =
+      typeof rawGpu === 'string' ? rawGpu : typeof rawGpu?.model === 'string' ? rawGpu.model : undefined;
+    const registeredGpuMemoryGB: number | undefined =
+      typeof rawGpu === 'object' && typeof rawGpu?.memoryGB === 'number' && rawGpu.memoryGB > 0 ? rawGpu.memoryGB : undefined;
     const gpuModel =
-      (comp.hardware as any)?.gpu ||
-      (comp.id === 'MAC-01' ? 'M2 Ultra' : comp.id === 'PC-01' ? 'RTX 4090' : 'H100');
+      registeredGpuModel || (comp.id === 'MAC-01' ? 'M2 Ultra' : comp.id === 'PC-01' ? 'RTX 4090' : 'H100');
     const gpuCount = (comp.hardware as any)?.gpuCount || (comp.id === 'DGX-01' ? 8 : 1);
     const gpuInfo = comp.capabilities?.includes('gpuAcceleration')
       ? {
           model: gpuModel,
           count: gpuCount,
-          memoryGB: comp.id === 'DGX-01' ? 640 : comp.id === 'MAC-01' ? 128 : 24,
+          memoryGB: registeredGpuMemoryGB ?? (comp.id === 'DGX-01' ? 640 : comp.id === 'MAC-01' ? 128 : 24),
         }
       : undefined;
 
