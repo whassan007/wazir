@@ -22,6 +22,7 @@ import {
   type InboxMessage,
   type OutboxEntry,
   type ResourceLease,
+  normalizeCoordinationTransportKind,
 } from '../types/coordination.js';
 
 const MAX_WIRE_FRAME_BYTES = 4 * 1024 * 1024;
@@ -167,6 +168,15 @@ export interface NatsWireTransportOptions {
   user?: string;
   pass?: string;
   verbose?: boolean;
+  /**
+   * Wait for the server's `PONG` to a `PING` sent after each batch before resolving
+   * `publishBatch` (default `true`). This proves the server processed the `PUB` frames, so a
+   * broker that dies mid-stream causes the batch to stay in the outbox instead of being lost
+   * in a kernel socket buffer. Disabling it restores fire-and-forget writes.
+   */
+  confirmPublish?: boolean;
+  /** Timeout for the publish confirmation `PONG` (default: connect timeout, min 1000ms). */
+  publishAckTimeoutMs?: number;
 }
 
 interface NatsSubscriptionRecord {
@@ -177,8 +187,18 @@ interface NatsSubscriptionRecord {
 
 /**
  * Zero-dependency NATS Core text-wire transport (`PUB`/`SUB`) over `node:net`.
- * Provides at-most-once wire delivery backed by local outbox durability; does not
- * implement server-acknowledged JetStream streams.
+ *
+ * Delivery semantics:
+ * - Wire: **at-most-once** (NATS Core). The server neither persists nor redelivers; a
+ *   subscriber that is disconnected while a message is routed misses it. This is NOT
+ *   JetStream (no streams, no consumer acks, no replay from the broker).
+ * - Producer: `publishBatch` resolves only after the server's `PONG` to a trailing `PING`
+ *   (unless `confirmPublish: false`), so the fabric's local outbox keeps every event that the
+ *   server did not provably process and retries it. Because the failure may be ambiguous
+ *   (server processed the PUB but the PONG was lost), retries can duplicate.
+ * - Consumer: must deduplicate on `event_id` / `idempotency_key` for exactly-once effects.
+ * - Reconnect: the transport does not reconnect on its own; `connect()` re-establishes the
+ *   socket and re-sends every registered `SUB` (the fabric calls it during flush).
  */
 export class NatsWireTransport implements CoordinationTransportAdapter {
   readonly kind: CoordinationTransportKind = 'nats-core';
@@ -191,6 +211,9 @@ export class NatsWireTransport implements CoordinationTransportAdapter {
   private readonly user?: string;
   private readonly pass?: string;
   private readonly verbose: boolean;
+  private readonly confirmPublish: boolean;
+  private readonly publishAckTimeoutMs: number;
+  private pongWaiters: Array<{ resolve: () => void; reject: (err: Error) => void; timer: NodeJS.Timeout }> = [];
 
   private socket?: net.Socket;
   private connected = false;
@@ -212,6 +235,29 @@ export class NatsWireTransport implements CoordinationTransportAdapter {
     this.user = options.user ?? parsed.user;
     this.pass = options.pass ?? parsed.pass;
     this.verbose = options.verbose ?? false;
+    this.confirmPublish = options.confirmPublish ?? true;
+    this.publishAckTimeoutMs = Math.max(1, options.publishAckTimeoutMs ?? Math.max(1000, this.defaultConnectTimeoutMs));
+  }
+
+  private failPongWaiters(err: Error): void {
+    const waiters = this.pongWaiters;
+    this.pongWaiters = [];
+    for (const w of waiters) {
+      clearTimeout(w.timer);
+      w.reject(err);
+    }
+  }
+
+  private waitForPong(): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        const idx = this.pongWaiters.findIndex((w) => w.timer === timer);
+        if (idx !== -1) this.pongWaiters.splice(idx, 1);
+        reject(new Error(`NATS publish confirmation (PONG) timed out after ${this.publishAckTimeoutMs}ms`));
+      }, this.publishAckTimeoutMs);
+      timer.unref();
+      this.pongWaiters.push({ resolve, reject, timer });
+    });
   }
 
   isConnected(): boolean {
@@ -299,11 +345,13 @@ export class NatsWireTransport implements CoordinationTransportAdapter {
 
       socket.on('error', (err: Error) => {
         this.connected = false;
+        this.failPongWaiters(err);
         finish(err);
       });
 
       socket.on('close', () => {
         this.connected = false;
+        this.failPongWaiters(new Error('NATS socket closed before publish was confirmed'));
         if (this.socket === socket) {
           this.socket = undefined;
         }
@@ -362,8 +410,14 @@ export class NatsWireTransport implements CoordinationTransportAdapter {
           this.serverInfo = {};
         }
         onInfo?.();
-      } else if (line === '+OK' || line === 'PONG') {
-        // Handled control acknowledgements.
+      } else if (line === 'PONG') {
+        const waiter = this.pongWaiters.shift();
+        if (waiter) {
+          clearTimeout(waiter.timer);
+          waiter.resolve();
+        }
+      } else if (line === '+OK') {
+        // Handled control acknowledgement.
       } else if (line.startsWith('-ERR')) {
         // Server protocol error; disconnect if fatal, otherwise tolerate gracefully.
         if (/authorization|stale|permissions/i.test(line)) {
@@ -414,8 +468,14 @@ export class NatsWireTransport implements CoordinationTransportAdapter {
       const body = Buffer.from(JSON.stringify(event), 'utf8');
       chunks.push(Buffer.from(`PUB ${subject} ${body.byteLength}\r\n`, 'utf8'), body, Buffer.from('\r\n', 'utf8'));
     }
+    if (this.confirmPublish) {
+      chunks.push(Buffer.from('PING\r\n', 'utf8'));
+    }
     const wirePayload = Buffer.concat(chunks);
     const socket = this.socket;
+    // Register the waiter before writing so a fast PONG cannot be missed.
+    const confirmed = this.confirmPublish ? this.waitForPong() : undefined;
+    confirmed?.catch(() => undefined);
 
     await new Promise<void>((resolve, reject) => {
       if (!socket || socket.destroyed || !socket.writable) {
@@ -431,6 +491,17 @@ export class NatsWireTransport implements CoordinationTransportAdapter {
         }
       });
     });
+    if (confirmed) {
+      try {
+        await confirmed;
+      } catch (err) {
+        // Ambiguous outcome: the server may or may not have routed the batch. Treat the
+        // connection as unusable so the next flush reconnects and the outbox retries.
+        this.connected = false;
+        if (this.socket === socket && socket && !socket.destroyed) socket.destroy();
+        throw err;
+      }
+    }
   }
 
   subscribe(handler: (event: CoordinationEventEnvelope) => void): () => void {
@@ -456,6 +527,7 @@ export class NatsWireTransport implements CoordinationTransportAdapter {
     this.closed = true;
     this.connected = false;
     this.subs.clear();
+    this.failPongWaiters(new Error('NatsWireTransport closed'));
     const sock = this.socket;
     this.socket = undefined;
     if (sock && !sock.destroyed) {
@@ -1540,8 +1612,11 @@ export class CoordinationFabric {
     const outboxDeadLetters = outboxEntries.filter((e) => e.status === 'dead_letter').length;
     const circuitState = this.currentCircuitState();
 
+    // Adapters are typed, but third-party/older adapters may still report the removed
+    // 'nats-jetstream' kind at runtime; normalize it to the implemented 'nats-core'.
     const transportKind: CoordinationTransportKind =
-      this.transport?.kind ?? (this.natsUrl ? 'nats-core' : this.fabricDir || this.store ? 'durable-local' : 'in-process');
+      normalizeCoordinationTransportKind(this.transport?.kind) ??
+      (this.natsUrl ? 'nats-core' : this.fabricDir || this.store ? 'durable-local' : 'in-process');
 
     const { p50, p95 } = computePercentiles(this.latencySamples);
     let totalPublished = this.totalEventsPublished;
@@ -1558,7 +1633,7 @@ export class CoordinationFabric {
     return {
       healthy: !this.closed && circuitState !== 'open',
       transport: transportKind,
-      natsConfigured: Boolean(this.natsUrl || this.transport?.kind === 'nats-core' || this.transport?.kind === 'nats-jetstream'),
+      natsConfigured: Boolean(this.natsUrl || transportKind === 'nats-core'),
       natsConnected: this.transport?.isConnected() ?? false,
       circuitState,
       outboxPending,

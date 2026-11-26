@@ -56,7 +56,54 @@ export interface CoordinationEventEnvelope<TPayload = Record<string, unknown>> {
   untrusted_peer_input?: boolean;
 }
 
-export type CoordinationTransportKind = 'in-process' | 'durable-local' | 'nats-core' | 'nats-jetstream';
+/**
+ * Transport kinds actually implemented by the coordination fabric.
+ *
+ * Delivery semantics (v0.4.3):
+ * - `in-process`: synchronous local fan-out inside one process; no durability.
+ * - `durable-local`: every event is written to `<fabricDir>/events` and an outbox entry is
+ *   written to `<fabricDir>/outbox` (atomic rename) before `publish()` resolves.
+ * - `nats-core`: NATS Core `PUB`/`SUB` (no JetStream). On the wire this is **at-most-once**:
+ *   the NATS server does not persist or redeliver, and a subscriber that is disconnected
+ *   when a message is routed never sees it. Producer-side durability comes from the local
+ *   outbox: an entry is only marked `delivered` after the server answers a `PING` that
+ *   follows the batch's `PUB` frames (i.e. the server has processed them). If the broker is
+ *   unreachable, entries stay `pending`/`failed` and are retried with backoff (circuit
+ *   breaker), then moved to the DLQ after `maxRetries`. A retry after an ambiguous failure
+ *   can re-send an event, so producer->server is at-least-once and consumers MUST
+ *   deduplicate on `event_id` / `idempotency_key` to obtain exactly-once side effects.
+ *
+ * `'nats-jetstream'` was removed in v0.4.3 (it was never implemented); persisted or
+ * externally reported values are mapped to `'nats-core'` by
+ * {@link normalizeCoordinationTransportKind}.
+ */
+export type CoordinationTransportKind = 'in-process' | 'durable-local' | 'nats-core';
+
+export const COORDINATION_TRANSPORT_KINDS: readonly CoordinationTransportKind[] = [
+  'in-process',
+  'durable-local',
+  'nats-core',
+] as const;
+
+/** Legacy transport identifiers accepted on read and mapped to an implemented kind. */
+const LEGACY_TRANSPORT_KIND_ALIASES: Readonly<Record<string, CoordinationTransportKind>> = {
+  'nats-jetstream': 'nats-core',
+  jetstream: 'nats-core',
+  nats: 'nats-core',
+};
+
+/**
+ * Normalize a transport kind read from persisted state, CLI/env config or a third-party
+ * adapter. Legacy `'nats-jetstream'` maps to `'nats-core'`; unknown values yield `undefined`.
+ */
+export function normalizeCoordinationTransportKind(raw: unknown): CoordinationTransportKind | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const value = raw.trim().toLowerCase();
+  if ((COORDINATION_TRANSPORT_KINDS as readonly string[]).includes(value)) {
+    return value as CoordinationTransportKind;
+  }
+  return LEGACY_TRANSPORT_KIND_ALIASES[value];
+}
 
 export type CircuitBreakerState = 'closed' | 'open' | 'half-open';
 

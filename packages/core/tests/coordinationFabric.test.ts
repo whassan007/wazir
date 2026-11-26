@@ -5,9 +5,15 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   CoordinationFabric,
+  NatsWireTransport,
   validateCoordinationEnvelope,
   type CoordinationEventEnvelope,
 } from '../src/services/coordinationFabric.js';
+import {
+  COORDINATION_TRANSPORT_KINDS,
+  normalizeCoordinationTransportKind,
+  type CoordinationTransportAdapter,
+} from '../src/types/coordination.js';
 
 const tempDirs: string[] = [];
 
@@ -99,7 +105,7 @@ describe('CoordinationFabric', () => {
     const published: CoordinationEventEnvelope[] = [];
     let shouldFail = false;
     const mockTransport = {
-      kind: 'nats-jetstream' as const,
+      kind: 'nats-core' as const,
       isConnected: () => true,
       connect: async () => {},
       publishBatch: async (events: CoordinationEventEnvelope[]) => {
@@ -141,5 +147,68 @@ describe('CoordinationFabric', () => {
     expect(['open', 'half-open', 'closed']).toContain(status.circuitState);
 
     await fabric.close();
+  });
+
+  it('exposes only implemented transport kinds and maps legacy nats-jetstream to nats-core', () => {
+    expect([...COORDINATION_TRANSPORT_KINDS]).toEqual(['in-process', 'durable-local', 'nats-core']);
+    expect(normalizeCoordinationTransportKind('nats-jetstream')).toBe('nats-core');
+    expect(normalizeCoordinationTransportKind('NATS-JETSTREAM')).toBe('nats-core');
+    expect(normalizeCoordinationTransportKind('durable-local')).toBe('durable-local');
+    expect(normalizeCoordinationTransportKind('bogus')).toBeUndefined();
+    expect(normalizeCoordinationTransportKind(undefined)).toBeUndefined();
+  });
+
+  it('reports nats-core in status when a legacy adapter still claims nats-jetstream', async () => {
+    const legacyAdapter = {
+      kind: 'nats-jetstream',
+      isConnected: () => false,
+      connect: async () => {},
+      publishBatch: async () => {},
+      subscribe: () => () => {},
+      close: async () => {},
+    } as unknown as CoordinationTransportAdapter;
+    const fabric = new CoordinationFabric({ fabricDir: makeTempDir(), transport: legacyAdapter });
+    const status = await fabric.getStatus();
+    expect(status.transport).toBe('nats-core');
+    expect(status.natsConfigured).toBe(true);
+    await fabric.close();
+  });
+
+  it('keeps events in the outbox when the NATS server never confirms the publish (no PONG)', async () => {
+    // Minimal fake NATS server: sends INFO, swallows everything, never answers PING.
+    const sockets: net.Socket[] = [];
+    const server = net.createServer((sock) => {
+      sockets.push(sock);
+      sock.on('error', () => undefined);
+      sock.write('INFO {"server_id":"fake","version":"0.0.0","max_payload":1048576}\r\n');
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as net.AddressInfo).port;
+
+    const transport = new NatsWireTransport({
+      url: `nats://127.0.0.1:${port}`,
+      connectTimeoutMs: 500,
+      publishAckTimeoutMs: 150,
+    });
+    const fabric = new CoordinationFabric({
+      fabricDir: makeTempDir(),
+      transport,
+      maxRetries: 10,
+      retryBaseDelayMs: 10_000,
+    });
+    try {
+      await fabric.publish({ type: 'task.progress', workflow_id: 'wf-noack', payload: { n: 1 } });
+      const result = await fabric.flush(2000);
+      expect(result.flushed).toBe(0);
+      expect(result.failed).toBe(1);
+      const failed = await fabric.listOutbox('failed');
+      expect(failed).toHaveLength(1);
+      expect(failed[0]!.lastError).toMatch(/PONG|closed/);
+      expect(await fabric.listOutbox('delivered')).toHaveLength(0);
+    } finally {
+      await fabric.close();
+      for (const s of sockets) s.destroy();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 });
