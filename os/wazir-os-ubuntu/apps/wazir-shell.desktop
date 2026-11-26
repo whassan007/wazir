@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Wazir Hybrid Shell
+GenericName=AI-Native Linux Terminal
+Comment=Interactive Linux shell with deterministic command execution and Wazir AI orchestration
+Exec=gnome-terminal -- wa shell
+Icon=utilities-terminal
+Terminal=false
+Categories=System;TerminalEmulator;Development;
+Keywords=Terminal;Shell;Wazir;AI;

@@ -656,6 +656,221 @@ providersCmd
 
 program.addCommand(providersCmd);
 
+// engine command (pluggable Wazir OS engine: Liquid AI, Gemma 4, Qwen, Super Nemo)
+const engineCmd = new Command()
+  .name('engine')
+  .description('Inspect or replace the Wazir OS AI engine per job (Liquid AI, Gemma 4, Qwen, Super Nemo)');
+
+engineCmd
+  .command('status', { isDefault: true })
+  .description('Show active Wazir OS engine, job overrides, and available profiles')
+  .option('--json', 'Output in JSON format')
+  .action(async (options) => {
+    const { WazirOsEngineRegistry, loadOsEngineConfig } = await import('@wazir/models');
+    const registry = new WazirOsEngineRegistry(loadOsEngineConfig());
+    const payload = { ...registry.getConfig(), profiles: registry.listProfiles() };
+    if (options.json) {
+      console.log(JSON.stringify(payload, null, 2));
+      return;
+    }
+    console.log(`Active Wazir OS Engine: ${payload.activeEngineId}`);
+    console.log(`Job Overrides: ${Object.keys(payload.jobOverrides).length ? JSON.stringify(payload.jobOverrides) : '(none — auto per job)'}`);
+    console.log('Available Profiles:');
+    for (const p of payload.profiles) {
+      console.log(`  - ${p.id} [${p.family} / ${p.latencyTier}]: ${p.displayName}`);
+    }
+  });
+
+engineCmd
+  .command('use <engineId>')
+  .description('Replace the main Wazir OS engine (auto, liquid-light, gemma4-generic, qwen-coder, super-nemo, or custom id)')
+  .action(async (engineId: string) => {
+    const { WazirOsEngineRegistry, loadOsEngineConfig, saveOsEngineConfig } = await import('@wazir/models');
+    const registry = new WazirOsEngineRegistry(loadOsEngineConfig());
+    registry.setActiveEngine(engineId);
+    const next = registry.getConfig();
+    saveOsEngineConfig(next);
+    console.log(`Wazir OS main engine set to: ${next.activeEngineId}`);
+  });
+
+engineCmd
+  .command('map <jobKind> <engineId>')
+  .description('Override the engine for a specific job kind (or pass "clear" as engineId)')
+  .action(async (jobKind: string, engineId: string) => {
+    const { WazirOsEngineRegistry, loadOsEngineConfig, saveOsEngineConfig } = await import('@wazir/models');
+    const registry = new WazirOsEngineRegistry(loadOsEngineConfig());
+    registry.setJobOverride(jobKind as any, engineId === 'clear' ? null : engineId);
+    const next = registry.getConfig();
+    saveOsEngineConfig(next);
+    console.log(`Updated job override '${jobKind}': ${engineId === 'clear' ? 'cleared' : engineId}`);
+  });
+
+program.addCommand(engineCmd);
+
+// shell command (Hybrid Linux PTY + Wazir AI shell)
+const shellCmd = new Command()
+  .name('shell')
+  .description('Start an interactive hybrid Linux shell (native POSIX commands + natural-language Wazir tasks)')
+  .option('-c, --command <line>', 'Execute a single hybrid input line and exit')
+  .action(async (options) => {
+    const readline = await import('node:readline');
+    const { HybridShellSession } = await import('@wazir/ubuntu-os');
+    const session = new HybridShellSession({
+      aiHandler: async (prompt) => {
+        const { createEngine } = await import('./engine.js');
+        const engine = await createEngine();
+        const { executeTask } = await import('./run.js');
+        const res = await executeTask(engine, prompt, { quiet: false });
+        return {
+          exitCode: res.success ? 0 : 1,
+          stdout: res.result ?? '',
+          stderr: res.errors.join('\n'),
+        };
+      },
+    });
+    if (options.command) {
+      const res = await session.executeLine(String(options.command));
+      if (res.stdout) process.stdout.write(res.stdout);
+      if (res.stderr) process.stderr.write(res.stderr);
+      process.exit(res.exitCode);
+    }
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout,
+      prompt: `wazir(${session.getMode()})> `,
+    });
+    rl.prompt();
+    rl.on('line', async (line) => {
+      if (line.trim() === 'exit' || line.trim() === 'quit') {
+        rl.close();
+        return;
+      }
+      const res = await session.executeLine(line);
+      if (res.stdout) process.stdout.write(res.stdout);
+      if (res.stderr) process.stderr.write(res.stderr);
+      rl.setPrompt(`wazir(${session.getMode()})> `);
+      rl.prompt();
+    });
+    rl.on('close', () => process.exit(0));
+  });
+
+program.addCommand(shellCmd);
+
+// backend command (Replaceable Execution Backends)
+const backendCmd = new Command()
+  .name('backend')
+  .description('Manage replaceable Wazir execution backends (wazir-native, qwen-code, opencode, codex, user-plugin)');
+
+backendCmd
+  .command('list', { isDefault: true })
+  .description('List available execution backends and capabilities')
+  .option('--json', 'Output in JSON format')
+  .action(async (options) => {
+    const { ExecutionBackendRegistry } = await import('@wazir/ubuntu-os');
+    const reg = new ExecutionBackendRegistry();
+    const active = reg.getActiveId();
+    const items = reg.list().map((b) => ({
+      id: b.id,
+      name: b.name,
+      source: b.source,
+      active: b.id === active,
+      capabilities: b.capabilities,
+    }));
+    if (options.json) {
+      console.log(JSON.stringify(items, null, 2));
+      return;
+    }
+    for (const item of items) {
+      console.log(`${item.active ? '*' : ' '} ${item.id} (${item.source}) — ${item.name} [checkpoint=${item.capabilities.checkpointResume}]`);
+    }
+  });
+
+backendCmd
+  .command('inspect <name>')
+  .description('Inspect backend capabilities')
+  .action(async (name: string) => {
+    const { ExecutionBackendRegistry } = await import('@wazir/ubuntu-os');
+    const reg = new ExecutionBackendRegistry();
+    const b = reg.inspect(name);
+    if (!b) {
+      console.error(`Unknown backend: ${name}`);
+      process.exit(1);
+    }
+    console.log(JSON.stringify({ id: b.id, name: b.name, version: b.version, source: b.source, capabilities: b.capabilities }, null, 2));
+  });
+
+backendCmd
+  .command('use <name>')
+  .description('Switch the active execution backend')
+  .action(async (name: string) => {
+    const { ExecutionBackendRegistry } = await import('@wazir/ubuntu-os');
+    const reg = new ExecutionBackendRegistry();
+    const b = reg.use(name);
+    console.log(`Active execution backend set to: ${b.id} (${b.name})`);
+  });
+
+backendCmd
+  .command('test <name>')
+  .description('Run health check on an execution backend')
+  .action(async (name: string) => {
+    const { ExecutionBackendRegistry } = await import('@wazir/ubuntu-os');
+    const reg = new ExecutionBackendRegistry();
+    const health = await reg.test(name);
+    console.log(JSON.stringify(health, null, 2));
+    if (!health.healthy) process.exit(1);
+  });
+
+backendCmd
+  .command('status')
+  .description('Show active execution backend')
+  .action(async () => {
+    const { ExecutionBackendRegistry } = await import('@wazir/ubuntu-os');
+    const reg = new ExecutionBackendRegistry();
+    console.log(`Active execution backend: ${reg.getActiveId()}`);
+  });
+
+backendCmd
+  .command('reset')
+  .description('Reset active execution backend to wazir-native')
+  .action(async () => {
+    const { ExecutionBackendRegistry } = await import('@wazir/ubuntu-os');
+    const reg = new ExecutionBackendRegistry();
+    reg.reset();
+    console.log('Execution backend reset to wazir-native');
+  });
+
+program.addCommand(backendCmd);
+
+// settings command (CLI parity with Wazir Ubuntu Settings)
+const settingsCmd = new Command()
+  .name('settings')
+  .description('View or update Wazir Ubuntu OS settings');
+
+settingsCmd
+  .command('show', { isDefault: true })
+  .description('Show current Wazir OS settings')
+  .action(async () => {
+    const { loadUbuntuSettings } = await import('@wazir/ubuntu-os');
+    console.log(JSON.stringify(loadUbuntuSettings(), null, 2));
+  });
+
+settingsCmd
+  .command('set <key> <value>')
+  .description('Update a top-level Wazir OS setting (localOnly, routingStrategy, activeBackendId, activeProviderId, approvalPolicy, shellMode)')
+  .action(async (key: string, value: string) => {
+    const { loadUbuntuSettings, saveUbuntuSettings } = await import('@wazir/ubuntu-os');
+    const current = loadUbuntuSettings() as unknown as Record<string, unknown>;
+    if (!(key in current)) {
+      console.error(`Unknown setting key: ${key}`);
+      process.exit(1);
+    }
+    current[key] = value === 'true' ? true : value === 'false' ? false : value;
+    saveUbuntuSettings(current as unknown as import('@wazir/ubuntu-os').WazirUbuntuSettings);
+    console.log(`Updated ${key} = ${String(current[key])}`);
+  });
+
+program.addCommand(settingsCmd);
+
 // models command
 const modelsCmd = new Command()
   .name('models')

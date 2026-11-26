@@ -1,0 +1,14 @@
+[Unit]
+Description=Wazir Spotlight KRunner D-Bus Provider
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=dbus
+BusName=org.wazir.Spotlight
+ExecStart=/usr/libexec/wazir-spotlight-dbus.py
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target

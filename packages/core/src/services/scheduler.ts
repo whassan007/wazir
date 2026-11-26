@@ -656,7 +656,7 @@ export class Scheduler {
     const scored: ScoredModel[] = records.map((record) => {
       const result = this.scoreModel(task, record, requiredContext, classification, routing, effectiveHarnessId);
       if (excludeModelIds.includes(record.id)) result.rejected.push('excluded: already tried by this execution');
-      if (result.rejected.length === 0 && hasPinnedTarget) {
+      if (result.rejected.length === 0 && (hasPinnedTarget || this.deps.models.instancesOf(record.id).length > 0)) {
         const placement = this.assessPlacements(task, record, requiredContext, routing);
         if (placement.placements.length === 0) {
           result.placementFailures = placement.failures;

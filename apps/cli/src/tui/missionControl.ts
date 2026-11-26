@@ -240,7 +240,8 @@ export function renderMissionControl(s: MissionSnapshot, width: number, height: 
     );
   }
   if (s.fleetNodes?.length) {
-    lines.push(`  models:shards:Health °C█Cap:Avail:RAM:GB ${s.fleetNodes.map((n) => `${n.id} ${n.gpu ?? 'CPU'}`).join('|')}`);
+    lines.push(`  ${s.fleetNodes.map((n) => `${n.id} ${n.gpu ?? 'CPU'}`).join('|')}`);
+    lines.push('  models:shards:Health °C█Cap:Avail:RAM:GB');
   }
   if (!dense) lines.push('');
   lines.push(section('EXECUTION MONITOR'));

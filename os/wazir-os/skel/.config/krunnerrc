@@ -1,0 +1,16 @@
+[Plugins]
+baloosearchEnabled=true
+calculatorEnabled=true
+krunner_appstreamEnabled=true
+krunner_bookmarksrunnerEnabled=true
+krunner_sessionsEnabled=true
+krunner_shellEnabled=true
+krunner_systemsettingsEnabled=true
+krunner_webshortcutsEnabled=false
+servicesEnabled=true
+wazir_spotlightEnabled=true
+
+[General]
+FreeFloating=true
+HistoryBehavior=ImmediateCompletion
+RetainPriorSearch=false

@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Wazir Terminal
+GenericName=Developer Terminal
+Comment=Native zsh terminal with Wazir CVI Dark Abyss theme and wa CLI
+Exec=konsole --profile Wazir
+Icon=utilities-terminal
+Terminal=false
+Categories=System;TerminalEmulator;Development;
+Keywords=Terminal;Shell;Zsh;Wazir;
+StartupWMClass=konsole

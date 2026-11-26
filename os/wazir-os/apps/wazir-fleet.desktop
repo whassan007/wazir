@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Wazir Fleet
+GenericName=Local & Remote AI Fleet
+Comment=Inspect compute nodes, loaded models, and remote workers
+Exec=xdg-open http://127.0.0.1:4801/#fleet
+Icon=network-server
+Terminal=false
+Categories=Development;System;
+Keywords=Wazir;Fleet;Models;Workers;

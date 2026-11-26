@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Wazir Approvals
+GenericName=Policy Approval Queue
+Comment=Review and approve policy-gated AI tool and shell actions
+Exec=xdg-open http://127.0.0.1:4801/#approvals
+Icon=security-high
+Terminal=false
+Categories=Development;Security;
+Keywords=Wazir;Approvals;Policy;Security;

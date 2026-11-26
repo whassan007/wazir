@@ -1,0 +1,9 @@
+[Plymouth Theme]
+Name=Wazir
+Description=Wazir OS Boot Splash — Dark Abyss & Electric Blue
+ModuleName=bgrt
+
+[bgrt]
+BackgroundColor=0x0f131a
+Logo=/usr/share/pixmaps/wazir-emblem.png
+Title=WAZIR — A Local AI Fleet Counselor

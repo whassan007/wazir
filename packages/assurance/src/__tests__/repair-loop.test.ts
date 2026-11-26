@@ -5,7 +5,7 @@
  */
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 
 import {
@@ -444,7 +444,8 @@ describe('GAM Appendix B governance case (unit + built-in engine)', () => {
   });
 });
 
-describe('RED_SIGNAL_COMPLIANCE end-to-end demonstration (live tools)', () => {
+const hasLiveAssuranceTools = existsSync(resolve(process.cwd(), 'tools/z3-venv/bin/python3'));
+describe.skipIf(!hasLiveAssuranceTools)('RED_SIGNAL_COMPLIANCE end-to-end demonstration (live tools)', () => {
   it(
     'runs the full counterexample-guided repair loop, regression replay, holdout seeds, negative controls, GAM Appendix B, ledger verification, and AssuranceRecord validation',
     async () => {

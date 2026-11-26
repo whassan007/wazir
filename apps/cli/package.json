@@ -21,6 +21,7 @@
     "@wazir/goals": "*",
     "@wazir/observability": "*",
     "@wazir/registry": "*",
+    "@wazir/ubuntu-os": "*",
     "@wazir/runtimes-anthropic": "*",
     "@wazir/runtimes-google": "*",
     "@wazir/runtimes-interfaces": "*",

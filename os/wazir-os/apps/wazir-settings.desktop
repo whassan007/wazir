@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Wazir Settings
+GenericName=Wazir OS & Autonomy Settings
+Comment=Configure theme, accessibility, autonomy posture, and remote hosts
+Exec=xdg-open http://127.0.0.1:4801/#settings
+Icon=configure
+Terminal=false
+Categories=Settings;System;
+Keywords=Wazir;Settings;Theme;Autonomy;

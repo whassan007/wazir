@@ -1,0 +1,13 @@
+{
+  "KPlugin": {
+    "Authors": [
+      {
+        "Email": "wael@wazir.dev",
+        "Name": "Wazir Maintainers"
+      }
+    ],
+    "Id": "WazirAbyss",
+    "License": "AGPL-3.0-only",
+    "Name": "Wazir Dark Abyss"
+  }
+}

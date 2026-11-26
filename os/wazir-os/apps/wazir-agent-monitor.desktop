@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Wazir Agent Monitor
+GenericName=Live Agent Execution Monitor
+Comment=Watch live agent turns, SSE streams, and verification hooks
+Exec=konsole --profile Wazir -e wa tui
+Icon=utilities-system-monitor
+Terminal=false
+Categories=Development;System;
+Keywords=Wazir;Agent;Monitor;TUI;

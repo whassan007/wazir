@@ -1,0 +1,18 @@
+{
+  "name": "@wazir/spotlight",
+  "version": "0.4.3",
+  "license": "AGPL-3.0-only",
+  "description": "Wazir Spotlight — KRunner org.kde.krunner1 provider for deterministic developer search and policy-governed AI execution",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "wazir-spotlight": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  }
+}

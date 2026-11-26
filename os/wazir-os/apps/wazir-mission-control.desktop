@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Wazir Mission Control
+GenericName=Goal Studio & Orchestrator
+Comment=Autonomous Goal Studio, execution graph, and verification pipeline
+Exec=xdg-open http://127.0.0.1:4801/goal-studio/
+Icon=wazir
+Terminal=false
+Categories=Development;ArtificialIntelligence;
+Keywords=Wazir;Mission Control;Goals;Orchestration;

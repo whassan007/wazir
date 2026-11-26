@@ -177,6 +177,10 @@ export interface NatsWireTransportOptions {
   confirmPublish?: boolean;
   /** Timeout for the publish confirmation `PONG` (default: connect timeout, min 1000ms). */
   publishAckTimeoutMs?: number;
+  /** Automatically reconnect and re-register `SUB` frames when the socket closes (default `true`). */
+  autoReconnect?: boolean;
+  /** Base reconnect delay in ms (default `250`). */
+  reconnectDelayMs?: number;
 }
 
 interface NatsSubscriptionRecord {
@@ -213,6 +217,10 @@ export class NatsWireTransport implements CoordinationTransportAdapter {
   private readonly verbose: boolean;
   private readonly confirmPublish: boolean;
   private readonly publishAckTimeoutMs: number;
+  private readonly autoReconnect: boolean;
+  private readonly baseReconnectDelayMs: number;
+  private reconnectAttempts = 0;
+  private reconnectTimer?: NodeJS.Timeout;
   private pongWaiters: Array<{ resolve: () => void; reject: (err: Error) => void; timer: NodeJS.Timeout }> = [];
 
   private socket?: net.Socket;
@@ -237,6 +245,24 @@ export class NatsWireTransport implements CoordinationTransportAdapter {
     this.verbose = options.verbose ?? false;
     this.confirmPublish = options.confirmPublish ?? true;
     this.publishAckTimeoutMs = Math.max(1, options.publishAckTimeoutMs ?? Math.max(1000, this.defaultConnectTimeoutMs));
+    this.autoReconnect = options.autoReconnect ?? true;
+    this.baseReconnectDelayMs = Math.max(20, options.reconnectDelayMs ?? 250);
+  }
+
+  private scheduleReconnect(): void {
+    if (this.closed || !this.autoReconnect || this.subs.size === 0 || this.reconnectTimer) {
+      return;
+    }
+    const delay = Math.min(2000, this.baseReconnectDelayMs * 2 ** Math.min(this.reconnectAttempts, 4));
+    this.reconnectAttempts++;
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = undefined;
+      if (this.closed || this.isConnected()) return;
+      void this.connect().catch(() => {
+        this.scheduleReconnect();
+      });
+    }, delay);
+    this.reconnectTimer.unref();
   }
 
   private failPongWaiters(err: Error): void {
@@ -333,6 +359,7 @@ export class NatsWireTransport implements CoordinationTransportAdapter {
             return;
           }
           this.connected = true;
+          this.reconnectAttempts = 0;
           finish();
         });
       };
@@ -355,7 +382,11 @@ export class NatsWireTransport implements CoordinationTransportAdapter {
         if (this.socket === socket) {
           this.socket = undefined;
         }
+        const wasConnected = settled;
         finish(new Error('NATS socket closed before handshake completed'));
+        if (wasConnected) {
+          this.scheduleReconnect();
+        }
       });
     });
 

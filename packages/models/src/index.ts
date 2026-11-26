@@ -120,3 +120,5 @@ export class ModelRouter {
 export function createModelRouter(models: ModelRecord[]): ModelRouter {
   return new ModelRouter(models);
 }
+
+export * from './engineProfiles.js';

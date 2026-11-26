@@ -1,0 +1,490 @@
+{
+  "generatedAt": "2026-11-20T06:49:37.278Z",
+  "totalTasks": 50,
+  "tier0Summary": {
+    "dispatch": {
+      "count": 20,
+      "p50Ms": 0.092,
+      "p95Ms": 0.133,
+      "maxMs": 0.292
+    },
+    "total": {
+      "count": 20,
+      "p50Ms": 3.882,
+      "p95Ms": 18.117,
+      "maxMs": 76.775
+    }
+  },
+  "tier1Summary": {
+    "dispatch": {
+      "count": 30,
+      "p50Ms": 0.001,
+      "p95Ms": 0.004,
+      "maxMs": 0.123
+    },
+    "total": {
+      "count": 30,
+      "p50Ms": 0.003,
+      "p95Ms": 0.012,
+      "maxMs": 0.224
+    }
+  },
+  "allDispatchPercentiles": {
+    "count": 50,
+    "p50Ms": 0.002,
+    "p95Ms": 0.123,
+    "maxMs": 0.292
+  },
+  "records": [
+    {
+      "id": 1,
+      "category": "standard-linux",
+      "route": "shell",
+      "backend": "posix-shell",
+      "dispatchOverheadMs": 0.133,
+      "totalDurationMs": 4.459,
+      "exitCode": 0
+    },
+    {
+      "id": 2,
+      "category": "standard-linux",
+      "route": "shell",
+      "backend": "posix-shell",
+      "dispatchOverheadMs": 0.292,
+      "totalDurationMs": 4.281,
+      "exitCode": 0
+    },
+    {
+      "id": 3,
+      "category": "standard-linux",
+      "route": "shell",
+      "backend": "posix-shell",
+      "dispatchOverheadMs": 0.128,
+      "totalDurationMs": 4.698,
+      "exitCode": 0
+    },
+    {
+      "id": 4,
+      "category": "standard-linux",
+      "route": "shell",
+      "backend": "posix-shell",
+      "dispatchOverheadMs": 0.105,
+      "totalDurationMs": 3.831,
+      "exitCode": 0
+    },
+    {
+      "id": 5,
+      "category": "standard-linux",
+      "route": "shell",
+      "backend": "posix-shell",
+      "dispatchOverheadMs": 0.009,
+      "totalDurationMs": 2.613,
+      "exitCode": 0
+    },
+    {
+      "id": 6,
+      "category": "filesystem-nav",
+      "route": "shell",
+      "backend": "posix-shell",
+      "dispatchOverheadMs": 0.093,
+      "totalDurationMs": 4.801,
+      "exitCode": 0
+    },
+    {
+      "id": 7,
+      "category": "filesystem-nav",
+      "route": "shell",
+      "backend": "posix-shell",
+      "dispatchOverheadMs": 0.007,
+      "totalDurationMs": 3.818,
+      "exitCode": 0
+    },
+    {
+      "id": 8,
+      "category": "file-search",
+      "route": "shell",
+      "backend": "posix-shell",
+      "dispatchOverheadMs": 0.091,
+      "totalDurationMs": 3.882,
+      "exitCode": 0
+    },
+    {
+      "id": 9,
+      "category": "storage-analysis",
+      "route": "shell",
+      "backend": "posix-shell",
+      "dispatchOverheadMs": 0.092,
+      "totalDurationMs": 3.485,
+      "exitCode": 0
+    },
+    {
+      "id": 10,
+      "category": "process-monitoring",
+      "route": "shell",
+      "backend": "posix-shell",
+      "dispatchOverheadMs": 0.107,
+      "totalDurationMs": 4.778,
+      "exitCode": 0
+    },
+    {
+      "id": 11,
+      "category": "standard-linux",
+      "route": "shell",
+      "backend": "posix-shell",
+      "dispatchOverheadMs": 0.062,
+      "totalDurationMs": 5.477,
+      "exitCode": 0
+    },
+    {
+      "id": 12,
+      "category": "code-repo",
+      "route": "shell",
+      "backend": "posix-shell",
+      "dispatchOverheadMs": 0.1,
+      "totalDurationMs": 6.167,
+      "exitCode": 0
+    },
+    {
+      "id": 13,
+      "category": "code-repo",
+      "route": "shell",
+      "backend": "posix-shell",
+      "dispatchOverheadMs": 0.01,
+      "totalDurationMs": 76.775,
+      "exitCode": 0
+    },
+    {
+      "id": 14,
+      "category": "dev-env",
+      "route": "shell",
+      "backend": "posix-shell",
+      "dispatchOverheadMs": 0.119,
+      "totalDurationMs": 18.117,
+      "exitCode": 0
+    },
+    {
+      "id": 15,
+      "category": "dev-env",
+      "route": "shell",
+      "backend": "posix-shell",
+      "dispatchOverheadMs": 0.122,
+      "totalDurationMs": 5.357,
+      "exitCode": 0
+    },
+    {
+      "id": 16,
+      "category": "network",
+      "route": "shell",
+      "backend": "posix-shell",
+      "dispatchOverheadMs": 0.116,
+      "totalDurationMs": 3.556,
+      "exitCode": 0
+    },
+    {
+      "id": 17,
+      "category": "package-updates",
+      "route": "shell",
+      "backend": "posix-shell",
+      "dispatchOverheadMs": 0.005,
+      "totalDurationMs": 2.394,
+      "exitCode": 0
+    },
+    {
+      "id": 18,
+      "category": "package-install",
+      "route": "shell",
+      "backend": "posix-shell",
+      "dispatchOverheadMs": 0.002,
+      "totalDurationMs": 2.395,
+      "exitCode": 0
+    },
+    {
+      "id": 19,
+      "category": "service-diagnostics",
+      "route": "shell",
+      "backend": "posix-shell",
+      "dispatchOverheadMs": 0.003,
+      "totalDurationMs": 2.757,
+      "exitCode": 0
+    },
+    {
+      "id": 20,
+      "category": "app-launch",
+      "route": "shell",
+      "backend": "posix-shell",
+      "dispatchOverheadMs": 0.003,
+      "totalDurationMs": 2.474,
+      "exitCode": 0
+    },
+    {
+      "id": 21,
+      "category": "filesystem-nav",
+      "route": "ai",
+      "backend": "wazir-native",
+      "dispatchOverheadMs": 0.123,
+      "totalDurationMs": 0.224,
+      "exitCode": 0
+    },
+    {
+      "id": 22,
+      "category": "file-search",
+      "route": "ai",
+      "backend": "wazir-native",
+      "dispatchOverheadMs": 0.077,
+      "totalDurationMs": 0.082,
+      "exitCode": 0
+    },
+    {
+      "id": 23,
+      "category": "app-launch",
+      "route": "ai",
+      "backend": "wazir-native",
+      "dispatchOverheadMs": 0.002,
+      "totalDurationMs": 0.006,
+      "exitCode": 0
+    },
+    {
+      "id": 24,
+      "category": "package-install",
+      "route": "ai",
+      "backend": "wazir-native",
+      "dispatchOverheadMs": 0.004,
+      "totalDurationMs": 0.007,
+      "exitCode": 0
+    },
+    {
+      "id": 25,
+      "category": "package-updates",
+      "route": "ai",
+      "backend": "wazir-native",
+      "dispatchOverheadMs": 0.002,
+      "totalDurationMs": 0.005,
+      "exitCode": 0
+    },
+    {
+      "id": 26,
+      "category": "service-diagnostics",
+      "route": "ai",
+      "backend": "wazir-native",
+      "dispatchOverheadMs": 0.002,
+      "totalDurationMs": 0.004,
+      "exitCode": 0
+    },
+    {
+      "id": 27,
+      "category": "process-monitoring",
+      "route": "ai",
+      "backend": "wazir-native",
+      "dispatchOverheadMs": 0.002,
+      "totalDurationMs": 0.006,
+      "exitCode": 0
+    },
+    {
+      "id": 28,
+      "category": "network",
+      "route": "ai",
+      "backend": "wazir-native",
+      "dispatchOverheadMs": 0.001,
+      "totalDurationMs": 0.004,
+      "exitCode": 0
+    },
+    {
+      "id": 29,
+      "category": "storage-analysis",
+      "route": "ai",
+      "backend": "wazir-native",
+      "dispatchOverheadMs": 0.002,
+      "totalDurationMs": 0.006,
+      "exitCode": 0
+    },
+    {
+      "id": 30,
+      "category": "dev-env",
+      "route": "ai",
+      "backend": "wazir-native",
+      "dispatchOverheadMs": 0.002,
+      "totalDurationMs": 0.012,
+      "exitCode": 0
+    },
+    {
+      "id": 31,
+      "category": "code-repo",
+      "route": "ai",
+      "backend": "wazir-native",
+      "dispatchOverheadMs": 0.002,
+      "totalDurationMs": 0.005,
+      "exitCode": 0
+    },
+    {
+      "id": 32,
+      "category": "code-repo",
+      "route": "ai",
+      "backend": "wazir-native",
+      "dispatchOverheadMs": 0.001,
+      "totalDurationMs": 0.003,
+      "exitCode": 0
+    },
+    {
+      "id": 33,
+      "category": "desktop-settings",
+      "route": "ai",
+      "backend": "wazir-native",
+      "dispatchOverheadMs": 0.002,
+      "totalDurationMs": 0.003,
+      "exitCode": 0
+    },
+    {
+      "id": 34,
+      "category": "desktop-settings",
+      "route": "ai",
+      "backend": "wazir-native",
+      "dispatchOverheadMs": 0.003,
+      "totalDurationMs": 0.004,
+      "exitCode": 0
+    },
+    {
+      "id": 35,
+      "category": "voice-instructions",
+      "route": "ai",
+      "backend": "wazir-native",
+      "dispatchOverheadMs": 0.002,
+      "totalDurationMs": 0.003,
+      "exitCode": 0
+    },
+    {
+      "id": 36,
+      "category": "voice-instructions",
+      "route": "ai",
+      "backend": "wazir-native",
+      "dispatchOverheadMs": 0.001,
+      "totalDurationMs": 0.002,
+      "exitCode": 0
+    },
+    {
+      "id": 37,
+      "category": "backend-changes",
+      "route": "ai",
+      "backend": "wazir-native",
+      "dispatchOverheadMs": 0.001,
+      "totalDurationMs": 0.002,
+      "exitCode": 0
+    },
+    {
+      "id": 38,
+      "category": "backend-changes",
+      "route": "ai",
+      "backend": "wazir-native",
+      "dispatchOverheadMs": 0.001,
+      "totalDurationMs": 0.003,
+      "exitCode": 0
+    },
+    {
+      "id": 39,
+      "category": "provider-failure",
+      "route": "ai",
+      "backend": "wazir-native",
+      "dispatchOverheadMs": 0.001,
+      "totalDurationMs": 0.003,
+      "exitCode": 0
+    },
+    {
+      "id": 40,
+      "category": "provider-failure",
+      "route": "ai",
+      "backend": "wazir-native",
+      "dispatchOverheadMs": 0.001,
+      "totalDurationMs": 0.003,
+      "exitCode": 0
+    },
+    {
+      "id": 41,
+      "category": "recovery-cancel",
+      "route": "ai",
+      "backend": "wazir-native",
+      "dispatchOverheadMs": 0.001,
+      "totalDurationMs": 0.002,
+      "exitCode": 0
+    },
+    {
+      "id": 42,
+      "category": "recovery-cancel",
+      "route": "ai",
+      "backend": "wazir-native",
+      "dispatchOverheadMs": 0.001,
+      "totalDurationMs": 0.003,
+      "exitCode": 0
+    },
+    {
+      "id": 43,
+      "category": "standard-linux",
+      "route": "ai",
+      "backend": "wazir-native",
+      "dispatchOverheadMs": 0.001,
+      "totalDurationMs": 0.003,
+      "exitCode": 0
+    },
+    {
+      "id": 44,
+      "category": "network",
+      "route": "ai",
+      "backend": "wazir-native",
+      "dispatchOverheadMs": 0.002,
+      "totalDurationMs": 0.003,
+      "exitCode": 0
+    },
+    {
+      "id": 45,
+      "category": "storage-analysis",
+      "route": "ai",
+      "backend": "wazir-native",
+      "dispatchOverheadMs": 0.001,
+      "totalDurationMs": 0.002,
+      "exitCode": 0
+    },
+    {
+      "id": 46,
+      "category": "process-monitoring",
+      "route": "ai",
+      "backend": "wazir-native",
+      "dispatchOverheadMs": 0.001,
+      "totalDurationMs": 0.002,
+      "exitCode": 0
+    },
+    {
+      "id": 47,
+      "category": "dev-env",
+      "route": "ai",
+      "backend": "wazir-native",
+      "dispatchOverheadMs": 0.001,
+      "totalDurationMs": 0.002,
+      "exitCode": 0
+    },
+    {
+      "id": 48,
+      "category": "code-repo",
+      "route": "ai",
+      "backend": "wazir-native",
+      "dispatchOverheadMs": 0.001,
+      "totalDurationMs": 0.002,
+      "exitCode": 0
+    },
+    {
+      "id": 49,
+      "category": "desktop-settings",
+      "route": "ai",
+      "backend": "wazir-native",
+      "dispatchOverheadMs": 0.001,
+      "totalDurationMs": 0.003,
+      "exitCode": 0
+    },
+    {
+      "id": 50,
+      "category": "service-diagnostics",
+      "route": "ai",
+      "backend": "wazir-native",
+      "dispatchOverheadMs": 0.001,
+      "totalDurationMs": 0.003,
+      "exitCode": 0
+    }
+  ]
+}

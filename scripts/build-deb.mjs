@@ -347,6 +347,38 @@ if (existsSync(path.join(ubuntuRoot, 'profile/wazir-gnome-profile.sh'))) {
   chmodSync(profDst, 0o755);
 }
 
+// 4b. Ubuntu GNOME 50 Search Provider & Desktop Launchers
+const gnomeDir = path.resolve(rootDir, 'os/wazir-os-ubuntu/gnome');
+if (existsSync(gnomeDir)) {
+  writeFileSync(
+    path.join(stagingDir, 'usr/share/gnome-shell/search-providers/org.wazir.SearchProvider.ini'),
+    readFileSync(path.join(gnomeDir, 'org.wazir.SearchProvider.ini'), 'utf8'),
+    'utf8',
+  );
+  writeFileSync(
+    path.join(stagingDir, 'usr/share/dbus-1/services/org.wazir.SearchProvider.service'),
+    readFileSync(path.join(gnomeDir, 'org.wazir.SearchProvider.service'), 'utf8'),
+    'utf8',
+  );
+  writeFileSync(
+    path.join(stagingDir, 'usr/lib/systemd/user/wazir-gnome-search.service'),
+    readFileSync(path.join(gnomeDir, 'wazir-gnome-search.service'), 'utf8'),
+    'utf8',
+  );
+  const searchPy = path.join(stagingDir, 'usr/libexec/wazir-gnome-search.py');
+  writeFileSync(searchPy, readFileSync(path.join(gnomeDir, 'wazir-gnome-search.py'), 'utf8'), 'utf8');
+  chmodSync(searchPy, 0o755);
+}
+const ubuntuAppsDir = path.resolve(rootDir, 'os/wazir-os-ubuntu/apps');
+if (existsSync(ubuntuAppsDir)) {
+  for (const desktopFile of ['wazir-shell.desktop', 'wazir-ubuntu-settings.desktop', 'wazir-voice.desktop']) {
+    const src = path.join(ubuntuAppsDir, desktopFile);
+    if (existsSync(src)) {
+      writeFileSync(path.join(stagingDir, 'usr/share/applications', desktopFile), readFileSync(src, 'utf8'), 'utf8');
+    }
+  }
+}
+
 // 5. Documentation & License
 writeFileSync(path.join(stagingDir, 'usr/share/doc/wazir/README.md'), readFileSync(path.resolve(rootDir, 'README.md'), 'utf8'), 'utf8');
 writeFileSync(path.join(stagingDir, 'usr/share/doc/wazir/copyright'), readFileSync(path.resolve(rootDir, 'LICENSE'), 'utf8'), 'utf8');

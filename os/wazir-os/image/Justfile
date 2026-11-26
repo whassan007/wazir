@@ -1,0 +1,16 @@
+image_name := "localhost/wazir-os"
+image_tag := "41"
+
+build-image:
+    ./build.sh
+
+build-iso:
+    mkdir -p output
+    sudo podman run --rm -it --privileged --pull=newer \
+        --security-opt label=type:unconfined_t \
+        -v ./output:/output \
+        -v /var/lib/containers/storage:/var/lib/containers/storage \
+        quay.io/centos-bootc/bootc-image-builder:latest \
+        --type iso \
+        --local \
+        {{image_name}}:{{image_tag}}

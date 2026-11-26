@@ -1,0 +1,20 @@
+{
+  "KPackageStructure": "Plasma/Applet",
+  "KPlugin": {
+    "Authors": [
+      {
+        "Email": "wael@wazir.dev",
+        "Name": "Wazir Maintainers"
+      }
+    ],
+    "Category": "System Information",
+    "Description": "Live Wazir Local AI Fleet status indicator for the top menu bar",
+    "Icon": "wazir",
+    "Id": "org.wazir.fleet",
+    "License": "AGPL-3.0-only",
+    "Name": "Wazir Fleet Status",
+    "Version": "1.0.0",
+    "Website": "https://github.com/whassan007/wazir"
+  },
+  "X-Plasma-API-Minimum-Version": "6.0"
+}

@@ -15,6 +15,7 @@
     "@wazir/database": "*",
     "@wazir/goals": "*",
     "@wazir/models": "*",
+    "@wazir/ubuntu-os": "*",
     "@wazir/policies": "*",
     "@wazir/runtimes-lmstudio": "*",
     "@wazir/runtimes-mlx": "*",

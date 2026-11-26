@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Wazir Spotlight
+Comment=Deterministic code, fleet, model, and policy-governed AI search
+Icon=wazir
+Type=Service
+X-KDE-ServiceTypes=Plasma/Runner
+X-Plasma-API=DBus
+X-Plasma-DBusRunner-Service=org.wazir.Spotlight
+X-Plasma-DBusRunner-Path=/WazirSpotlight
+X-KDE-PluginInfo-Name=wazir_spotlight
+X-KDE-PluginInfo-License=AGPL-3.0-only
+X-KDE-PluginInfo-EnabledByDefault=true

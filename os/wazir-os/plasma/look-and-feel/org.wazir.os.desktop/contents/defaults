@@ -1,0 +1,27 @@
+[kdeglobals][KDE]
+widgetStyle=Breeze
+SingleClick=false
+
+[kdeglobals][General]
+ColorScheme=WazirDark
+font=Inter,10,-1,5,400,0,0,0,0,0
+fixed=JetBrains Mono,10,-1,5,400,0,0,0,0,0
+smallestReadableFont=Inter,8,-1,5,400,0,0,0,0,0
+toolBarFont=Inter,9,-1,5,400,0,0,0,0,0
+menuFont=Inter,10,-1,5,400,0,0,0,0,0
+activeFont=Inter,10,-1,5,600,0,0,0,0,0
+
+[plasmarc][Theme]
+name=breeze-dark
+
+[kwinrc][org.kde.kdecoration2]
+library=org.kde.breeze
+theme=Breeze
+ButtonsOnLeft=XIA
+ButtonsOnRight=
+BorderSize=None
+BorderSizeAuto=false
+
+[Wallpaper]
+defaultWallpaperTheme=WazirAbyss
+defaultFileSuffix=.svg

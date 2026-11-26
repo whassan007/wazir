@@ -1116,8 +1116,9 @@ export function renderFleetOverviewPane(tui: any, cols: number, maxRows: number)
 
   for (const comp of computers) {
     const compRuntimes = runtimes.filter((r: any) => r.computerId === comp.id).map((r: any) => r.type);
+    const rawGpu = (comp.hardware as any)?.gpu;
     const gpuModel =
-      (comp.hardware as any)?.gpu ||
+      (typeof rawGpu === 'string' ? rawGpu : rawGpu?.model) ||
       (comp.id === 'MAC-01' ? 'M2 Ultra' : comp.id === 'PC-01' ? 'RTX 4090' : 'H100');
     const gpuCount = (comp.hardware as any)?.gpuCount || (comp.id === 'DGX-01' ? 8 : 1);
     const gpuInfo = comp.capabilities?.includes('gpuAcceleration')
