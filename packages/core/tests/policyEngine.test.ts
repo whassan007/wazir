@@ -179,12 +179,15 @@ describe('PolicyEngine', () => {
     });
 
     it('denies ask decisions when no approver is configured', async () => {
-      // Shell commands that require approval
+      // Shell commands that require approval. `git status` is classified
+      // read-only ('git-read-allow'), so use a local git write verb that is
+      // genuinely 'ask' and pin that precondition so the fixture cannot drift.
       const request = {
         tool: 'shell',
-        input: { command: 'git status' },
+        input: { command: 'git commit -m wip' },
       };
-      
+      expect(engine.classify(request).decision).toBe('ask');
+
       const decision = await engine.authorize(request);
       expect(decision.decision).toBe('deny');
     });
@@ -197,9 +200,10 @@ describe('PolicyEngine', () => {
       
       const request = {
         tool: 'shell',
-        input: { command: 'git status' },
+        input: { command: 'git commit -m wip' },
       };
-      
+      expect(engineWithApprover.classify(request).decision).toBe('ask');
+
       const decision = await engineWithApprover.authorize(request);
       expect(decision.decision).toBe('allow');
       expect(decision.rule).toContain('user-approved');
@@ -210,7 +214,9 @@ describe('PolicyEngine', () => {
         projectRoot: '/test/project',
         approveCallback: async () => 'unavailable',
       });
-      const decision = await engineNonInteractive.authorize({ tool: 'shell', input: { command: 'git status' } });
+      const request = { tool: 'shell', input: { command: 'git commit -m wip' } };
+      expect(engineNonInteractive.classify(request).decision).toBe('ask');
+      const decision = await engineNonInteractive.authorize(request);
       expect(decision.decision).toBe('deny');
       expect(decision.rule).toContain('escalated-from-ask');
       expect(decision.reasons.join(' ')).toContain('non-interactive');

@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   AgentRegistry,
   ComputerRegistry,
@@ -157,8 +157,20 @@ describe('JobOrchestrator coordination fabric integration', () => {
     expect(finished.graph.nodes[0]?.error).toBeUndefined();
     expect(finished.status).toBe('completed');
 
-    const events = await fabric.replayEvents({ workflowId: job.id });
-    const types = events.map((e) => e.type);
+    // JobOrchestrator publishes coordination events fire-and-forget (publishCoordinationEvent
+    // never awaits the fabric so fabric failures cannot crash a job). runJob() can therefore
+    // resolve before the trailing 'resource.released' / 'job.completed' envelopes are durably
+    // written. Poll the fabric until the terminal event is visible instead of racing it.
+    let types: string[] = [];
+    await vi.waitFor(
+      async () => {
+        const events = await fabric.replayEvents({ workflowId: job.id });
+        types = events.map((e) => e.type);
+        expect(types).toContain('resource.released');
+        expect(types).toContain('job.completed');
+      },
+      { timeout: 5000, interval: 25 },
+    );
     expect(types).toContain('job.started');
     expect(types).toContain('resource.acquired');
     expect(types).toContain('task.started');
