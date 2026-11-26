@@ -4,1334 +4,201 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Wazir Shell</title>
-  <style>
-    :root {
-      --bg: #0b0f17;
-      --panel: #111827;
-      --border: #1e293b;
-      --accent: #38bdf8;
-      --ok: #22c55e;
-      --warn: #eab308;
-      --err: #ef4444;
-      --text: #f8fafc;
-      --muted: #94a3b8;
-      --mono: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0; height: 100vh; display: flex; flex-direction: column;
-      background: var(--bg); color: var(--text); font-family: var(--mono);
-    }
-    header {
-      display: flex; align-items: center; justify-content: space-between;
-      padding: 8px 14px; background: var(--panel); border-bottom: 1px solid var(--border);
-      gap: 10px;
-    }
-    .tabs { display: flex; gap: 6px; align-items: center; overflow-x: auto; }
-    .tab {
-      padding: 5px 12px; border-radius: 6px; border: 1px solid var(--border);
-      background: #0f172a; color: var(--muted); cursor: pointer; font-size: 12px;
-      display: flex; align-items: center; gap: 8px;
-    }
-    .tab.active { border-color: var(--accent); color: var(--text); background: #162235; }
-    .actions { display: flex; gap: 8px; align-items: center; }
-    button {
-      background: #1e293b; color: var(--text); border: 1px solid var(--border);
-      border-radius: 6px; padding: 5px 10px; font-size: 12px; cursor: pointer;
-    }
-    button:hover { border-color: var(--accent); }
-    button.primary { background: #0284c7; border-color: #38bdf8; font-weight: 600; }
-    button.active-pill { border-color: var(--accent); background: #162235; color: var(--accent); }
-    button.warn-btn { border-color: rgba(234, 179, 8, 0.45); color: var(--warn); }
-    button.danger-btn { border-color: rgba(239, 68, 68, 0.45); color: var(--err); }
-    button.ok-btn { border-color: rgba(34, 197, 94, 0.45); color: var(--ok); }
-    .workspace {
-      flex: 1; display: flex; min-height: 0; overflow: hidden;
-    }
-    #terminal-output {
-      flex: 1; padding: 14px; overflow-y: auto; white-space: pre-wrap;
-      word-break: break-word; font-size: 13px; line-height: 1.45;
-      background: #070a10; min-width: 0; outline: none;
-    }
-    .jobs-drawer {
-      width: 440px; max-width: 48vw; display: none; flex-direction: column;
-      background: #0d131f; border-left: 1px solid var(--border); min-height: 0;
-    }
-    .jobs-drawer.open { display: flex; }
-    .drawer-header {
-      display: flex; align-items: center; justify-content: space-between;
-      padding: 10px 12px; border-bottom: 1px solid var(--border); background: var(--panel); gap: 8px;
-    }
-    .drawer-title { font-size: 12px; font-weight: 700; color: var(--text); letter-spacing: 0.03em; }
-    .drawer-filters {
-      display: flex; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--border); flex-wrap: wrap;
-    }
-    .drawer-body {
-      flex: 1; overflow-y: auto; padding: 10px 12px; display: flex; flex-direction: column; gap: 10px;
-    }
-    .job-card {
-      border: 1px solid var(--border); border-radius: 8px; padding: 10px; background: #111827;
-      display: flex; flex-direction: column; gap: 6px; cursor: pointer;
-    }
-    .job-card.selected { border-color: var(--accent); background: #152033; }
-    .job-card-top { display: flex; align-items: center; justify-content: space-between; gap: 6px; flex-wrap: wrap; }
-    .job-prompt { font-size: 12px; color: var(--text); line-height: 1.4; word-break: break-word; }
-    .job-meta { font-size: 11px; color: var(--muted); display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
-    .job-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
-    .job-actions button { padding: 3px 8px; font-size: 11px; }
-    .inspector-box {
-      border: 1px solid var(--border); border-radius: 8px; padding: 10px; background: #0b111d;
-      display: flex; flex-direction: column; gap: 8px; font-size: 11.5px;
-    }
-    .inspector-section-title { font-size: 11px; font-weight: 700; color: var(--accent); text-transform: uppercase; letter-spacing: 0.04em; }
-    .progress-track { width: 100%; height: 6px; border-radius: 999px; background: #1e293b; overflow: hidden; }
-    .progress-fill { height: 100%; background: linear-gradient(90deg, #38bdf8, #22c55e); transition: width 0.2s ease; }
-    .target-row {
-      display: flex; align-items: flex-start; justify-content: space-between; gap: 8px;
-      padding: 5px 6px; border-radius: 6px; background: #111827; border: 1px solid #1e293b;
-    }
-    .launcher-strip {
-      display: flex; align-items: center; justify-content: space-between; gap: 8px;
-      padding: 6px 14px; background: #0d1422; border-top: 1px solid var(--border); font-size: 11.5px; flex-wrap: wrap;
-    }
-    .launcher-group { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-    .mode-pill {
-      font-size: 10.5px; font-weight: 700; padding: 2px 7px; border-radius: 4px;
-      letter-spacing: 0.04em; border: 1px solid transparent; display: inline-block;
-    }
-    .mode-os { background: rgba(148, 163, 184, 0.16); color: #cbd5e1; border-color: rgba(148, 163, 184, 0.35); }
-    .mode-ai { background: rgba(56, 189, 248, 0.16); color: #38bdf8; border-color: rgba(56, 189, 248, 0.4); }
-    .mode-loop { background: rgba(34, 211, 238, 0.16); color: #22d3ee; border-color: rgba(34, 211, 238, 0.45); }
-    .mode-graph { background: rgba(192, 132, 252, 0.16); color: #d8b4fe; border-color: rgba(192, 132, 252, 0.45); }
-    .mode-goal { background: rgba(34, 197, 94, 0.16); color: #4ade80; border-color: rgba(34, 197, 94, 0.45); }
-    .mode-hybrid { background: rgba(234, 179, 8, 0.18); color: #facc15; border-color: rgba(234, 179, 8, 0.45); }
-    .status-pill {
-      font-size: 10.5px; padding: 1px 6px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted);
-    }
-    .status-running { color: #38bdf8; border-color: rgba(56, 189, 248, 0.5); }
-    .status-completed { color: #4ade80; border-color: rgba(34, 197, 94, 0.5); }
-    .status-paused { color: #facc15; border-color: rgba(234, 179, 8, 0.5); }
-    .status-failed, .status-blocked { color: #f87171; border-color: rgba(239, 68, 68, 0.5); }
-    .composer {
-      display: flex; align-items: center; gap: 8px; padding: 10px 14px;
-      background: var(--panel); border-top: 1px solid var(--border);
-    }
-    select, input {
-      background: #0f172a; color: var(--text); border: 1px solid var(--border);
-      border-radius: 6px; padding: 8px 10px; font-family: var(--mono); font-size: 13px;
-    }
-    input#cmd-input { flex: 1; }
-    .badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: #1e293b; color: var(--accent); }
-    .modal-backdrop {
-      position: fixed; inset: 0; background: rgba(0,0,0,0.75);
-      display: flex; align-items: center; justify-content: center; z-index: 999;
-    }
-    .modal {
-      width: min(620px, 92vw); background: var(--panel); border: 1px solid var(--border);
-      border-radius: 12px; padding: 22px; box-shadow: 0 20px 50px rgba(0,0,0,0.6);
-    }
-    .modal h2 { margin-top: 0; font-size: 18px; color: var(--accent); }
-    .modal p, .modal li { font-size: 12.5px; color: var(--muted); line-height: 1.5; }
-    .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px; }
-    #terminal-grid {
-      flex: 1;
-      min-width: 0;
-      display: grid;
-      gap: 6px;
-      padding: 8px;
-      background: var(--bg);
-      overflow: hidden;
-    }
-    .terminal-pane {
-      display: flex;
-      flex-direction: column;
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      overflow: hidden;
-      min-width: 0;
-      min-height: 0;
-    }
-    .terminal-pane.active {
-      border-color: var(--accent);
-      box-shadow: 0 0 0 1px var(--accent);
-    }
-    .pane-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 4px 10px;
-      background: var(--panel2);
-      border-bottom: 1px solid var(--border);
-      font-size: 11px;
-      color: var(--muted);
-    }
-    .pane-header-actions { display: flex; gap: 4px; }
-    .pane-header-actions button { padding: 2px 6px; font-size: 10px; }
-    .pane-output {
-      flex: 1;
-      margin: 0;
-      padding: 12px 14px;
-      overflow-y: auto;
-      white-space: pre-wrap;
-      word-break: break-word;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      font-size: 13px;
-      line-height: 1.45;
-      color: var(--text);
-      outline: none;
-    }
-    .palette-card { width: min(640px, 94vw); padding: 0; overflow: hidden; }
-    .palette-input-wrap { padding: 12px 14px; border-bottom: 1px solid var(--border); background: var(--panel2); }
-    .palette-input {
-      width: 100%;
-      background: var(--bg);
-      color: var(--text);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 9px 12px;
-      font-size: 14px;
-      outline: none;
-    }
-    .palette-input:focus { border-color: var(--accent); }
-    .palette-list { max-height: 360px; overflow-y: auto; padding: 6px; }
-    .palette-item {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 8px 12px;
-      border-radius: 6px;
-      cursor: pointer;
-      gap: 12px;
-    }
-    .palette-item:hover, .palette-item.selected { background: var(--panel2); }
-    .palette-item-title { font-size: 13px; color: var(--text); font-weight: 500; }
-    .palette-item-desc { font-size: 11px; color: var(--muted); }
-    .palette-item-cat { font-size: 10px; text-transform: uppercase; padding: 2px 6px; border-radius: 4px; background: var(--bg); color: var(--accent); border: 1px solid var(--border); }
-  </style>
+  <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <header>
-    <div class="tabs" id="tabs"></div>
-    <div class="actions">
-      <span class="badge" id="diag-badge">Diagnostics: Pending</span>
-      <button id="palette-btn" title="Open Universal Command Palette (Cmd/Ctrl+K)">⌘K Menu</button>
-      <button id="split-v-btn" title="Split active pane vertically (Cmd/Ctrl+D)">+ Split V</button>
-      <button id="split-h-btn" title="Split active pane horizontally (Cmd/Ctrl+Shift+D)">+ Split H</button>
-      <button id="jobs-drawer-btn" title="Toggle Live Loop, Graph & Goal Workflows Drawer">Workflows (0)</button>
-      <button id="ctrlc-btn" title="Send SIGINT (Ctrl+C) to active PTY">Ctrl+C</button>
-      <button id="clear-btn" title="Clear terminal buffer">Clear</button>
-      <button id="new-tab-btn">+ Tab</button>
-      <button id="mc-btn" class="primary">Mission Control</button>
-      <button id="about-btn">About</button>
+  <header class="topbar" role="banner">
+    <div class="tabs-bar" id="tabs" role="tablist" aria-label="Terminal tabs"></div>
+    <div class="topbar-actions">
+      <button id="new-tab-btn" type="button" title="New Terminal Tab (Cmd/Ctrl+T)">+ Tab</button>
+      <button id="split-v-btn" type="button" title="Split Vertically (Cmd/Ctrl+D)">Split</button>
+      <button id="palette-btn" type="button" title="Command Palette (Cmd/Ctrl+K)">⌘K</button>
+      <button id="fleet-btn" type="button" title="Fleet & Workflows (Cmd/Ctrl+Shift+F)">Fleet</button>
+      <button id="settings-btn" type="button" title="Settings (Cmd/Ctrl+,)">Settings</button>
+      <button id="about-btn" type="button" title="About Wazir Shell">About</button>
     </div>
   </header>
 
   <div class="workspace">
     <main id="terminal-grid" aria-live="polite"></main>
-    <aside class="jobs-drawer" id="jobs-drawer" aria-label="Workflows and Jobs">
+    <aside class="side-drawer" id="fleet-drawer" aria-label="Fleet and Workflows" hidden>
       <div class="drawer-header">
-        <span class="drawer-title">WORKFLOWS · LOOP / GRAPH / GOAL</span>
-        <div class="actions">
-          <button id="refresh-jobs-btn" type="button">Refresh</button>
-          <button id="close-drawer-btn" type="button">Close</button>
+        <span class="drawer-title">FLEET &amp; WORKFLOWS</span>
+        <div class="drawer-header-actions">
+          <button id="refresh-fleet-btn" type="button">Refresh</button>
+          <button id="open-mc-btn" type="button" class="primary">Mission Control</button>
+          <button id="close-drawer-btn" type="button" aria-label="Close drawer">×</button>
         </div>
       </div>
       <div class="drawer-filters" id="drawer-filters">
-        <button type="button" class="filter-btn active-pill" data-mode="all">All</button>
-        <button type="button" class="filter-btn" data-mode="loop">LOOP</button>
-        <button type="button" class="filter-btn" data-mode="graph">GRAPH</button>
-        <button type="button" class="filter-btn" data-mode="single">GOAL</button>
-        <button type="button" class="filter-btn" data-mode="hybrid">HYBRID</button>
+        <button type="button" class="filter-btn active-pill" data-panel="jobs">Workflows</button>
+        <button type="button" class="filter-btn" data-panel="fleet">Computers</button>
+        <button type="button" class="filter-btn" data-panel="models">Models</button>
+        <button type="button" class="filter-btn" data-panel="audit">Audit</button>
       </div>
-      <div class="drawer-body">
-        <div id="jobs-list"></div>
-        <div id="job-inspector"></div>
-      </div>
+      <div class="drawer-body" id="drawer-body"></div>
     </aside>
   </div>
 
-  <div class="launcher-strip">
-    <div class="launcher-group">
-      <span style="color:var(--muted);">Workflows:</span>
-      <button type="button" id="launch-loop-btn" title="Run prompt as a bounded iterative Loop">[LOOP] Loop</button>
-      <button type="button" id="launch-graph-btn" title="Compile & run prompt as a DAG Graph">[GRAPH] Graph</button>
-      <button type="button" id="launch-goal-btn" title="Auto-select Single, Loop, Graph, or Hybrid">[GOAL] Goal</button>
-      <label style="display:inline-flex;align-items:center;gap:4px;color:var(--muted);cursor:pointer;">
-        <input type="checkbox" id="dry-run-toggle" /> Dry-run
-      </label>
-    </div>
-    <div class="launcher-group">
-      <span id="active-workflow-pill" class="badge">No active workflow</span>
-    </div>
-  </div>
-
-  <form class="composer" id="cmd-form">
+  <form class="composer" id="cmd-form" autocomplete="off">
     <span id="route-badge" class="mode-pill mode-os">[OS]</span>
-    <select id="mode-select" aria-label="Execution mode">
+    <select id="mode-select" aria-label="Operating mode">
       <option value="auto">Auto</option>
-      <option value="shell">! [OS] Shell</option>
-      <option value="ai">? [AI] Task</option>
-      <option value="loop">[LOOP] Loop</option>
-      <option value="graph">[GRAPH] Graph</option>
-      <option value="goal">[GOAL] Goal</option>
+      <option value="shell">Native shell</option>
+      <option value="ai">AI prompt</option>
+      <option value="workflow">Workflow</option>
+      <option value="remote">Remote execution</option>
     </select>
-    <input id="cmd-input" type="text" placeholder="Type shell cmd (ls, git status), AI prompt, or /loop, /graph, /goal, /jobs..." autocomplete="off" autofocus />
-    <button type="submit" class="primary">Run</button>
+    <input
+      id="cmd-input"
+      type="text"
+      placeholder="Run shell command, ask AI, or type /loop, /graph, /goal..."
+      autocomplete="off"
+      spellcheck="false"
+    />
+    <button type="submit" class="primary" id="run-btn">Run</button>
   </form>
 
-  <div class="modal-backdrop" id="consent-modal" style="display:none;">
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="consent-title">
-      <h2 id="consent-title">Wazir Shell — Terms &amp; Diagnostic Disclosure (v2026-11-20.1)</h2>
-      <p>Before enabling diagnostic telemetry, please review:</p>
-      <ul>
-        <li><strong>Licensing:</strong> Existing Wazir Core/CLI/Desktop components are licensed under <strong>AGPL-3.0-only</strong>. Commercial authorization is required for commercial use of Wazir-branded noncommercial modules.</li>
-        <li><strong>Minimum Diagnostics:</strong> If accepted, only sanitized crash/error metadata (version, OS/arch, error code, component, random installation ID) is collected.</li>
-        <li><strong>Never Collected:</strong> Raw shell histories, prompts, source files, env vars, API keys, tokens, or private paths.</li>
-        <li><strong>Declining:</strong> Declining keeps telemetry completely disabled (zero events sent) and <strong>never blocks your native OS shell</strong>.</li>
+  <footer class="statusbar" role="status">
+    <div class="status-left">
+      <span id="status-shell" class="status-item">Shell: /bin/zsh</span>
+      <span id="status-cwd" class="status-item">~</span>
+      <span id="status-mode" class="status-item">Mode: Auto</span>
+    </div>
+    <div class="status-right">
+      <span id="status-model" class="status-item">Model: auto</span>
+      <button id="diag-status-btn" type="button" class="status-link">Diagnostics: Pending</button>
+      <span id="status-version" class="status-item">v0.4.2</span>
+    </div>
+  </footer>
+
+  <!-- Single Authoritative Modal Overlay -->
+  <div id="modal-overlay" class="modal-backdrop" hidden aria-hidden="true">
+    <!-- 1. ONBOARDING -->
+    <section class="modal-dialog" id="modal-onboarding" data-modal-state="ONBOARDING" role="dialog" aria-modal="true" aria-labelledby="onboarding-title" hidden>
+      <h2 id="onboarding-title">Welcome to Wazir Shell</h2>
+      <p class="modal-subtitle">A native, terminal-first workspace backed by your system shell and Wazir's 4-tier router.</p>
+      <div class="info-grid">
+        <div class="info-card">
+          <strong>System Shell</strong>
+          <span id="onboarding-shell-path">Detecting...</span>
+        </div>
+        <div class="info-card">
+          <strong>Shortcuts</strong>
+          <span>⌘K Palette · ⌘T Tab · ⌘⇧D Split · ⌘, Settings</span>
+        </div>
+      </div>
+      <div class="consent-box">
+        <strong>Optional Diagnostic Telemetry</strong>
+        <p>Diagnostic telemetry is strictly optional. Declining never disables your native shell or AI capabilities and sends zero diagnostic events.</p>
+      </div>
+      <div class="modal-actions">
+        <button type="button" id="onboarding-review-btn">Review diagnostic data</button>
+        <button type="button" id="onboarding-later-btn">Configure later</button>
+        <button type="button" id="onboarding-decline-btn">Continue without diagnostics</button>
+        <button type="button" id="onboarding-accept-btn" class="primary">Enable diagnostics</button>
+      </div>
+    </section>
+
+    <!-- 2. DIAGNOSTICS_CONSENT -->
+    <section class="modal-dialog" id="modal-diagnostics" data-modal-state="DIAGNOSTICS_CONSENT" role="dialog" aria-modal="true" aria-labelledby="diag-title" hidden>
+      <h2 id="diag-title">Diagnostic Telemetry &amp; Privacy</h2>
+      <p class="modal-subtitle">Diagnostic telemetry is strictly optional and disabled by default.</p>
+      <ul class="clean-list">
+        <li><strong>If enabled:</strong> Only sanitized crash/error metadata (version, OS/arch, error code, component, random installation ID) is recorded locally.</li>
+        <li><strong>Never collected:</strong> Raw shell histories, prompts, source files, environment variables, API keys, tokens, or private paths.</li>
+        <li><strong>If declined:</strong> Zero diagnostic events are recorded or uploaded, and all shell &amp; AI features remain 100% functional.</li>
       </ul>
-      <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#cbd5e1;margin-top:8px;">
-        <input type="checkbox" id="rich-optin" /> Optional: Also opt in to extended performance traces (previewed before upload)
+      <label class="checkbox-row">
+        <input type="checkbox" id="diag-rich-optin" />
+        <span>Optional: Enable extended performance traces</span>
       </label>
       <div class="modal-actions">
-        <button id="decline-btn" type="button">Decline Diagnostics (Shell Only)</button>
-        <button id="accept-btn" type="button" class="primary">Accept &amp; Enable</button>
+        <button type="button" id="diag-later-btn">Configure later</button>
+        <button type="button" id="diag-decline-btn">Continue without diagnostics</button>
+        <button type="button" id="diag-accept-btn" class="primary">Enable diagnostics</button>
       </div>
-    </div>
-  </div>
+    </section>
 
-  <div class="modal-backdrop" id="about-modal" style="display:none;">
-    <div class="modal" role="dialog" aria-modal="true">
-      <h2>About Wazir Shell</h2>
-      <div id="about-body" style="font-size:12.5px;color:#cbd5e1;line-height:1.6;"></div>
+    <!-- 3. ABOUT -->
+    <section class="modal-dialog" id="modal-about" data-modal-state="ABOUT" role="dialog" aria-modal="true" aria-labelledby="about-title" hidden>
+      <h2 id="about-title">About Wazir Shell</h2>
+      <div id="about-body" class="about-body"></div>
       <div class="modal-actions">
-        <button id="about-close" type="button" class="primary">Close</button>
+        <button type="button" id="about-close-btn" class="primary">Close</button>
       </div>
-    </div>
-  </div>
+    </section>
 
-  <script>
-    const invoke = window.__TAURI__?.core?.invoke;
-    const listen = window.__TAURI__?.event?.listen;
-
-    const tabs = [];
-    let activeId = null;
-    let customCommands = [];
-
-    const outputEl = document.getElementById('terminal-grid');
-    const tabsEl = document.getElementById('tabs');
-
-    function getActiveTab() {
-      return tabs.find((t) => t.id === activeId) || null;
-    }
-
-    function getActivePane() {
-      const tab = getActiveTab();
-      if (!tab || !Array.isArray(tab.panes)) return null;
-      return tab.panes.find((p) => p.id === tab.activePaneId) || tab.panes[0] || null;
-    }
-
-    function findPaneBySessionId(sessionId) {
-      for (const tab of tabs) {
-        const pane = (tab.panes || []).find((p) => p.id === sessionId);
-        if (pane) return { tab, pane };
-      }
-      return null;
-    }
-
-    const WAZIR_THEMES = {
-      'tokyo-night': { name: 'Tokyo Night', tokens: { '--bg': '#1a1b26', '--panel': '#16161e', '--panel2': '#24283b', '--border': '#3b4261', '--text': '#c0caf5', '--muted': '#737aa2', '--accent': '#7aa2f7', '--ok': '#9ece6a', '--warn': '#e0af68', '--err': '#f7768e' } },
-      'catppuccin': { name: 'Catppuccin Mocha', tokens: { '--bg': '#1e1e2e', '--panel': '#181825', '--panel2': '#313244', '--border': '#45475a', '--text': '#cdd6f4', '--muted': '#9399b2', '--accent': '#cba6f7', '--ok': '#a6e3a1', '--warn': '#f9e2af', '--err': '#f38ba8' } },
-      'gruvbox': { name: 'Gruvbox Dark', tokens: { '--bg': '#282828', '--panel': '#1d2021', '--panel2': '#3c3836', '--border': '#504945', '--text': '#ebdbb2', '--muted': '#a89984', '--accent': '#fe8019', '--ok': '#b8bb26', '--warn': '#fabd2f', '--err': '#fb4934' } },
-      'rose-pine': { name: 'Rosé Pine', tokens: { '--bg': '#191724', '--panel': '#1f1d2e', '--panel2': '#26233a', '--border': '#403d52', '--text': '#e0def4', '--muted': '#908caa', '--accent': '#ebbcba', '--ok': '#9ccfd8', '--warn': '#f6c177', '--err': '#eb6f92' } },
-      'nord': { name: 'Nord', tokens: { '--bg': '#2e3440', '--panel': '#242933', '--panel2': '#3b4252', '--border': '#4c566a', '--text': '#eceff4', '--muted': '#9aa7bd', '--accent': '#88c0d0', '--ok': '#a3be8c', '--warn': '#ebcb8b', '--err': '#bf616a' } },
-      'kanagawa': { name: 'Kanagawa', tokens: { '--bg': '#1f1f28', '--panel': '#16161d', '--panel2': '#2a2a37', '--border': '#54546d', '--text': '#dcd7ba', '--muted': '#727169', '--accent': '#7e9cd8', '--ok': '#98bb6c', '--warn': '#e6c384', '--err': '#e82424' } },
-      'everforest': { name: 'Everforest', tokens: { '--bg': '#2d353b', '--panel': '#232a2e', '--panel2': '#343f44', '--border': '#4f585e', '--text': '#d3c6aa', '--muted': '#859289', '--accent': '#a7c080', '--ok': '#83c092', '--warn': '#dbbc7f', '--err': '#e67e80' } },
-      'wazir-dark': { name: 'Wazir Dark', tokens: { '--bg': '#0b0f17', '--panel': '#111827', '--panel2': '#1f2937', '--border': '#2d3748', '--text': '#f3f4f6', '--muted': '#9ca3af', '--accent': '#6366f1', '--ok': '#10b981', '--warn': '#f59e0b', '--err': '#ef4444' } },
-      'wazir-light': { name: 'Wazir Light', tokens: { '--bg': '#f8fafc', '--panel': '#ffffff', '--panel2': '#f1f5f9', '--border': '#cbd5e1', '--text': '#0f172a', '--muted': '#64748b', '--accent': '#4f46e5', '--ok': '#059669', '--warn': '#d97706', '--err': '#dc2626' } },
-    };
-
-    async function applyTheme(themeId, persist = true) {
-      const preset = WAZIR_THEMES[themeId] || WAZIR_THEMES['tokyo-night'];
-      const resolvedId = WAZIR_THEMES[themeId] ? themeId : 'tokyo-night';
-      const root = document.documentElement;
-      for (const [k, v] of Object.entries(preset.tokens)) {
-        root.style.setProperty(k, v);
-      }
-      localStorage.setItem('wazir_theme_preset', resolvedId);
-      if (persist && invoke) {
-        try { await invoke('set_wazir_theme', { themeId: resolvedId }); } catch {}
-      }
-      return resolvedId;
-    }
-
-    async function initTheme() {
-      let themeId = localStorage.getItem('wazir_theme_preset') || 'tokyo-night';
-      if (invoke) {
-        try {
-          const res = await invoke('get_wazir_theme');
-          if (res && res.themeId && WAZIR_THEMES[res.themeId]) {
-            themeId = res.themeId;
-          }
-        } catch {}
-      }
-      await applyTheme(themeId, false);
-    }
-
-    async function loadCustomCommands() {
-      if (invoke) {
-        try {
-          const list = await invoke('list_wazir_custom_commands');
-          if (Array.isArray(list)) {
-            customCommands = list;
-            return customCommands;
-          }
-        } catch {}
-      }
-      try {
-        const raw = localStorage.getItem('wazir_custom_commands');
-        customCommands = raw ? JSON.parse(raw) : [];
-      } catch {
-        customCommands = [];
-      }
-      return customCommands;
-    }
-    const cmdForm = document.getElementById('cmd-form');
-    const cmdInput = document.getElementById('cmd-input');
-    const modeSelect = document.getElementById('mode-select');
-    const routeBadge = document.getElementById('route-badge');
-    const diagBadge = document.getElementById('diag-badge');
-    const jobsDrawerEl = document.getElementById('jobs-drawer');
-    const jobsDrawerBtn = document.getElementById('jobs-drawer-btn');
-    const jobsListEl = document.getElementById('jobs-list');
-    const jobInspectorEl = document.getElementById('job-inspector');
-    const dryRunToggle = document.getElementById('dry-run-toggle');
-    const activeWorkflowPill = document.getElementById('active-workflow-pill');
-
-    let workflowJobs = [];
-    let selectedJobId = null;
-    let inspectedJob = null;
-    let workflowModeFilter = 'all';
-    let jobsPollTimer = null;
-
-    function stripAnsi(s) {
-      return s.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
-    }
-
-    function modeBadgeMeta(mode) {
-      const m = String(mode || 'shell').toLowerCase();
-      if (m === 'loop') return { label: '[LOOP]', cls: 'mode-loop' };
-      if (m === 'graph') return { label: '[GRAPH]', cls: 'mode-graph' };
-      if (m === 'hybrid') return { label: '[HYBRID]', cls: 'mode-hybrid' };
-      if (m === 'goal' || m === 'single') return { label: '[GOAL]', cls: 'mode-goal' };
-      if (m === 'ai') return { label: '[AI]', cls: 'mode-ai' };
-      return { label: '[OS]', cls: 'mode-os' };
-    }
-
-    function makeModePill(mode) {
-      const meta = modeBadgeMeta(mode);
-      const span = document.createElement('span');
-      span.className = `mode-pill ${meta.cls}`;
-      span.textContent = meta.label;
-      return span;
-    }
-
-    function makeStatusPill(status) {
-      const st = String(status || 'unknown').toLowerCase();
-      const span = document.createElement('span');
-      const cls = st === 'running' ? 'status-running'
-        : st === 'completed' ? 'status-completed'
-        : (st === 'paused' || st === 'pausing') ? 'status-paused'
-        : (st === 'failed' || st === 'blocked') ? 'status-failed' : '';
-      span.className = `status-pill ${cls}`;
-      span.textContent = st.toUpperCase();
-      return span;
-    }
-
-    function detectIntentBadge(raw, selectMode) {
-      const t = (raw || '').trim();
-      if (selectMode === 'shell') return 'shell';
-      if (selectMode === 'ai') return 'ai';
-      if (selectMode === 'loop') return 'loop';
-      if (selectMode === 'graph') return 'graph';
-      if (selectMode === 'goal') return 'goal';
-      if (/^\/loop\b/i.test(t)) return 'loop';
-      if (/^\/graph\b/i.test(t)) return 'graph';
-      if (/^\/(goal|goals|jobs|inspect|pause|resume|stop)\b/i.test(t)) return 'goal';
-      if (!t || isLikelyShell(t)) return 'shell';
-      return 'ai';
-    }
-
-    function updateRouteBadge() {
-      const kind = detectIntentBadge(cmdInput.value, modeSelect.value);
-      const meta = modeBadgeMeta(kind);
-      routeBadge.className = `mode-pill ${meta.cls}`;
-      routeBadge.textContent = meta.label;
-    }
-
-    cmdInput.addEventListener('input', updateRouteBadge);
-    modeSelect.addEventListener('change', updateRouteBadge);
-    updateRouteBadge();
-
-    function parseJsonSafe(raw) {
-      if (typeof raw !== 'string') return raw;
-      const trimmed = raw.trim();
-      if (!trimmed) return null;
-      try {
-        return JSON.parse(trimmed);
-      } catch {
-        const start = trimmed.indexOf('{');
-        const arrStart = trimmed.indexOf('[');
-        const idx = start === -1 ? arrStart : (arrStart === -1 ? start : Math.min(start, arrStart));
-        if (idx >= 0) {
-          try { return JSON.parse(trimmed.slice(idx)); } catch {}
-        }
-        return null;
-      }
-    }
-
-    function resizeActivePty() {
-      if (!invoke || !activeId) return;
-      const cols = Math.max(40, Math.floor(outputEl.clientWidth / 8));
-      const rows = Math.max(12, Math.floor(outputEl.clientHeight / 19));
-      try { invoke('pty_resize', { sessionId: activeId, cols, rows }); } catch {}
-    }
-
-    function setDrawerOpen(open) {
-      jobsDrawerEl.classList.toggle('open', open);
-      resizeActivePty();
-      if (open) {
-        void refreshWorkflowJobs();
-      }
-    }
-
-    function renderWorkflowJobs() {
-      const filtered = workflowModeFilter === 'all'
-        ? workflowJobs
-        : workflowJobs.filter((j) => String(j.mode || '').toLowerCase() === workflowModeFilter);
-      jobsDrawerBtn.textContent = `Workflows (${workflowJobs.length})`;
-      const runningCount = workflowJobs.filter((j) => j.status === 'running').length;
-      if (runningCount > 0) {
-        activeWorkflowPill.textContent = `${runningCount} active workflow${runningCount === 1 ? '' : 's'}`;
-      } else if (workflowJobs.length > 0) {
-        const top = workflowJobs[0];
-        activeWorkflowPill.textContent = `Latest: ${top.runId} [${String(top.mode || 'goal').toUpperCase()} · ${String(top.status || '').toUpperCase()}]`;
-      } else {
-        activeWorkflowPill.textContent = 'No active workflow';
-      }
-
-      jobsListEl.innerHTML = '';
-      if (filtered.length === 0) {
-        const empty = document.createElement('div');
-        empty.style.cssText = 'color:var(--muted);font-size:12px;padding:10px;border:1px dashed var(--border);border-radius:8px;';
-        empty.textContent = workflowJobs.length === 0
-          ? 'No Loop, Graph, or Goal workflows yet. Launch one below or type /loop, /graph, /goal.'
-          : `No ${workflowModeFilter.toUpperCase()} workflows found.`;
-        jobsListEl.appendChild(empty);
-        renderJobInspector();
-        return;
-      }
-
-      for (const job of filtered) {
-        const card = document.createElement('div');
-        card.className = 'job-card' + (job.runId === selectedJobId ? ' selected' : '');
-        card.onclick = () => { void inspectWorkflowJob(job.runId); };
-
-        const top = document.createElement('div');
-        top.className = 'job-card-top';
-        const left = document.createElement('div');
-        left.style.cssText = 'display:flex;align-items:center;gap:6px;';
-        left.appendChild(makeModePill(job.mode));
-        const idSpan = document.createElement('span');
-        idSpan.style.cssText = 'font-size:11.5px;font-weight:700;color:var(--text);';
-        idSpan.textContent = job.runId;
-        left.appendChild(idSpan);
-        top.appendChild(left);
-        top.appendChild(makeStatusPill(job.status));
-        card.appendChild(top);
-
-        const promptEl = document.createElement('div');
-        promptEl.className = 'job-prompt';
-        promptEl.textContent = job.prompt || job.graphId || job.runId;
-        card.appendChild(promptEl);
-
-        const prog = job.progress || {};
-        const total = Number(prog.total || 0);
-        const done = Number(prog.completed || 0);
-        const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
-
-        const track = document.createElement('div');
-        track.className = 'progress-track';
-        const fill = document.createElement('div');
-        fill.className = 'progress-fill';
-        fill.style.width = `${pct}%`;
-        track.appendChild(fill);
-        card.appendChild(track);
-
-        const meta = document.createElement('div');
-        meta.className = 'job-meta';
-        const cursorText = prog.cursor !== undefined ? ` · cursor ${prog.cursor}/${total}` : '';
-        const spanProg = document.createElement('span');
-        spanProg.textContent = `${done}/${total} targets${cursorText}`;
-        const spanOrigin = document.createElement('span');
-        spanOrigin.textContent = `origin: ${job.originInterface || 'cli'}`;
-        meta.appendChild(spanProg);
-        meta.appendChild(spanOrigin);
-        card.appendChild(meta);
-
-        const actions = document.createElement('div');
-        actions.className = 'job-actions';
-        const inspectBtn = document.createElement('button');
-        inspectBtn.type = 'button';
-        inspectBtn.textContent = 'Inspect';
-        inspectBtn.onclick = (ev) => { ev.stopPropagation(); void inspectWorkflowJob(job.runId); };
-        actions.appendChild(inspectBtn);
-
-        if (job.status === 'running') {
-          const pauseBtn = document.createElement('button');
-          pauseBtn.type = 'button';
-          pauseBtn.className = 'warn-btn';
-          pauseBtn.textContent = 'Pause';
-          pauseBtn.onclick = (ev) => { ev.stopPropagation(); void controlWorkflowJob('pause', job.runId); };
-          actions.appendChild(pauseBtn);
-        }
-        if (job.status === 'paused' || job.status === 'idle') {
-          const resumeBtn = document.createElement('button');
-          resumeBtn.type = 'button';
-          resumeBtn.className = 'ok-btn';
-          resumeBtn.textContent = 'Resume';
-          resumeBtn.onclick = (ev) => { ev.stopPropagation(); void controlWorkflowJob('resume', job.runId); };
-          actions.appendChild(resumeBtn);
-        }
-        if (job.status === 'running' || job.status === 'paused' || job.status === 'pausing') {
-          const stopBtn = document.createElement('button');
-          stopBtn.type = 'button';
-          stopBtn.className = 'danger-btn';
-          stopBtn.textContent = 'Stop';
-          stopBtn.onclick = (ev) => { ev.stopPropagation(); void controlWorkflowJob('stop', job.runId); };
-          actions.appendChild(stopBtn);
-        }
-        card.appendChild(actions);
-        jobsListEl.appendChild(card);
-      }
-
-      renderJobInspector();
-    }
-
-    function renderJobInspector() {
-      jobInspectorEl.innerHTML = '';
-      if (!inspectedJob || !inspectedJob.run) return;
-      const box = document.createElement('div');
-      box.className = 'inspector-box';
-      const { summary, run, plan, targets = [], evidence = [] } = inspectedJob;
-
-      const hdr = document.createElement('div');
-      hdr.className = 'job-card-top';
-      const titleWrap = document.createElement('div');
-      titleWrap.style.cssText = 'display:flex;align-items:center;gap:6px;';
-      titleWrap.appendChild(makeModePill(plan?.mode || summary?.mode || 'goal'));
-      const title = document.createElement('span');
-      title.className = 'inspector-section-title';
-      title.textContent = `Inspect ${run.runId}`;
-      titleWrap.appendChild(title);
-      hdr.appendChild(titleWrap);
-      hdr.appendChild(makeStatusPill(run.status));
-      box.appendChild(hdr);
-
-      if (plan?.explanation?.reasons?.length) {
-        const ratTitle = document.createElement('div');
-        ratTitle.className = 'inspector-section-title';
-        ratTitle.textContent = 'Goal Mode Selection Rationale';
-        box.appendChild(ratTitle);
-        for (const r of plan.explanation.reasons.slice(0, 3)) {
-          const p = document.createElement('div');
-          p.style.color = 'var(--muted)';
-          p.textContent = `• ${r}`;
-          box.appendChild(p);
-        }
-      }
-
-      const loopSpec = plan?.loop || plan?.nestedLoops?.[0]?.loop;
-      if (loopSpec && Array.isArray(loopSpec.items)) {
-        const total = loopSpec.items.length;
-        const doneCount = loopSpec.items.filter((it) => run.targets?.[it.targetId]?.status === 'completed').length;
-        const cursor = summary?.progress?.cursor ?? loopSpec.cursor ?? doneCount;
-        const lTitle = document.createElement('div');
-        lTitle.className = 'inspector-section-title';
-        lTitle.textContent = `Loop Cursor Progress (${cursor}/${total})`;
-        box.appendChild(lTitle);
-
-        const track = document.createElement('div');
-        track.className = 'progress-track';
-        const fill = document.createElement('div');
-        fill.className = 'progress-fill';
-        fill.style.width = `${total > 0 ? Math.min(100, Math.round((cursor / total) * 100)) : 0}%`;
-        track.appendChild(fill);
-        box.appendChild(track);
-
-        const pred = document.createElement('div');
-        pred.style.color = 'var(--muted)';
-        pred.textContent = `Until: ${loopSpec.completionPredicate || 'all items verified'}`;
-        box.appendChild(pred);
-      }
-
-      if (plan?.criticalPath?.targets?.length) {
-        const cpTitle = document.createElement('div');
-        cpTitle.className = 'inspector-section-title';
-        cpTitle.textContent = `Graph DAG Critical Path (depth ${plan.criticalPath.depth})`;
-        box.appendChild(cpTitle);
-        const cpLine = document.createElement('div');
-        cpLine.style.color = '#d8b4fe';
-        cpLine.textContent = plan.criticalPath.targets.join(' → ');
-        box.appendChild(cpLine);
-      }
-
-      const targetMap = new Map(targets.map((t) => [t.id, t]));
-      const entries = Object.values(run.targets || {});
-      if (entries.length > 0) {
-        const tTitle = document.createElement('div');
-        tTitle.className = 'inspector-section-title';
-        tTitle.textContent = `Targets (${entries.length}) · Evidence (${evidence.length})`;
-        box.appendChild(tTitle);
-        for (const entry of entries.slice(0, 12)) {
-          const def = targetMap.get(entry.targetId);
-          const row = document.createElement('div');
-          row.className = 'target-row';
-          const info = document.createElement('div');
-          const nameLine = document.createElement('div');
-          nameLine.style.color = 'var(--text)';
-          nameLine.textContent = `${entry.targetId}: ${def?.title || entry.targetId}`;
-          info.appendChild(nameLine);
-          if (def?.dependsOn?.length) {
-            const depLine = document.createElement('div');
-            depLine.style.cssText = 'font-size:10.5px;color:var(--muted);';
-            depLine.textContent = `deps: ${def.dependsOn.join(', ')}`;
-            info.appendChild(depLine);
-          }
-          row.appendChild(info);
-          row.appendChild(makeStatusPill(entry.status));
-          box.appendChild(row);
-        }
-      }
-
-      jobInspectorEl.appendChild(box);
-    }
-
-    async function refreshWorkflowJobs() {
-      if (!invoke) return;
-      try {
-        const raw = await invoke('list_wazir_jobs', { status: null, mode: null, cwd: null });
-        const parsed = parseJsonSafe(raw);
-        workflowJobs = Array.isArray(parsed)
-          ? parsed
-          : (parsed?.jobs || parsed?.runs || []);
-        if (selectedJobId && workflowJobs.some((j) => j.runId === selectedJobId)) {
-          await inspectWorkflowJob(selectedJobId, true);
-        } else {
-          renderWorkflowJobs();
-        }
-      } catch {
-        // Non-fatal while CLI jobs index is empty or unavailable
-      }
-      scheduleJobsPolling();
-    }
-
-    function scheduleJobsPolling() {
-      if (jobsPollTimer) {
-        clearInterval(jobsPollTimer);
-        jobsPollTimer = null;
-      }
-      const hasActive = workflowJobs.some((j) => j.status === 'running' || j.status === 'pausing');
-      if (jobsDrawerEl.classList.contains('open') && hasActive) {
-        jobsPollTimer = setInterval(() => {
-          void refreshWorkflowJobs();
-        }, 2500);
-      }
-    }
-
-    async function inspectWorkflowJob(runId, silent = false) {
-      selectedJobId = runId;
-      if (!invoke) {
-        renderWorkflowJobs();
-        return;
-      }
-      try {
-        const raw = await invoke('inspect_wazir_job', { runId, cwd: null });
-        const parsed = parseJsonSafe(raw);
-        inspectedJob = parsed?.inspection || parsed || null;
-        setDrawerOpen(true);
-        renderWorkflowJobs();
-        if (!silent) {
-          const active = tabs.find((t) => t.id === activeId);
-          if (active && inspectedJob?.run) {
-            const badge = modeBadgeMeta(inspectedJob.plan?.mode || inspectedJob.summary?.mode || 'goal').label;
-            active.buffer += `\n${badge} Inspect ${inspectedJob.run.runId}: status=${inspectedJob.run.status}, targets=${Object.keys(inspectedJob.run.targets || {}).length}, evidence=${(inspectedJob.evidence || []).length}\n`;
-            renderOutput();
-          }
-        }
-      } catch (err) {
-        if (!silent) {
-          const active = tabs.find((t) => t.id === activeId);
-          if (active) {
-            active.buffer += `[workflow inspect error] ${err}\n`;
-            renderOutput();
-          }
-        }
-      }
-    }
-
-    async function controlWorkflowJob(action, runId) {
-      const active = tabs.find((t) => t.id === activeId);
-      if (!invoke) {
-        if (active) {
-          active.buffer += `[${action} ${runId}] unavailable in browser preview\n`;
-          renderOutput();
-        }
-        return;
-      }
-      try {
-        const raw = await invoke('control_wazir_job', { action, runId, cwd: null });
-        const parsed = parseJsonSafe(raw);
-        const status = parsed?.run?.status || parsed?.status || action;
-        if (active) {
-          active.buffer += `[workflow] ${action.toUpperCase()} ${runId} -> ${status}\n`;
-          renderOutput();
-        }
-        await refreshWorkflowJobs();
-        await inspectWorkflowJob(runId, true);
-      } catch (err) {
-        if (active) {
-          active.buffer += `[workflow ${action} error] ${err}\n`;
-          renderOutput();
-        }
-      }
-    }
-
-    async function dispatchWorkflow(mode, promptText) {
-      const active = tabs.find((t) => t.id === activeId);
-      const badge = modeBadgeMeta(mode).label;
-      const dryRun = Boolean(dryRunToggle.checked);
-      if (active) {
-        active.buffer += `\n${badge} Dispatching ${dryRun ? '(dry-run) ' : ''}workflow: ${promptText}\n`;
-        renderOutput();
-      }
-      if (!invoke) {
-        if (active) {
-          active.buffer += `${badge} [Desktop IPC unavailable in browser preview]\n`;
-          renderOutput();
-        }
-        return;
-      }
-      try {
-        const raw = await invoke('run_wazir_workflow', {
-          mode,
-          prompt: promptText,
-          cwd: null,
-          dryRun,
-          maxIterations: null,
-          maxConcurrency: null,
-          overrideMode: null,
-        });
-        const parsed = parseJsonSafe(raw);
-        const runId = parsed?.run?.runId || parsed?.summary?.runId || parsed?.runId;
-        const resolvedMode = parsed?.plan?.mode || parsed?.summary?.mode || mode;
-        const resolvedBadge = modeBadgeMeta(resolvedMode).label;
-        const status = parsed?.run?.status || parsed?.summary?.status || 'done';
-        if (active) {
-          if (runId) {
-            active.buffer += `${resolvedBadge} Run ${runId} finished with status=${status}\n`;
-          } else {
-            active.buffer += `${raw}\n`;
-          }
-          renderOutput();
-        }
-        await refreshWorkflowJobs();
-        if (runId) {
-          await inspectWorkflowJob(runId, true);
-        }
-      } catch (err) {
-        if (active) {
-          active.buffer += `${badge} error: ${err}\n`;
-          renderOutput();
-        }
-      }
-    }
-
-    function renderTabs() {
-      tabsEl.innerHTML = '';
-      tabs.forEach((t, idx) => {
-        const btn = document.createElement('button');
-        btn.className = 'tab' + (t.id === activeId ? ' active' : '');
-        btn.textContent = `Terminal ${idx + 1}`;
-        btn.onclick = () => { activeId = t.id; renderTabs(); renderOutput(); };
-        tabsEl.appendChild(btn);
-      });
-    }
-
-    function renderOutput() {
-      const active = getActiveTab();
-      outputEl.innerHTML = '';
-      if (!active || !active.panes || active.panes.length === 0) return;
-      const panes = active.panes;
-      if (panes.length === 1) {
-        outputEl.style.gridTemplateColumns = '1fr';
-        outputEl.style.gridTemplateRows = '1fr';
-      } else if (active.splitDirection === 'horizontal') {
-        outputEl.style.gridTemplateColumns = '1fr';
-        outputEl.style.gridTemplateRows = `repeat(${panes.length}, minmax(0, 1fr))`;
-      } else {
-        outputEl.style.gridTemplateColumns = `repeat(${panes.length}, minmax(0, 1fr))`;
-        outputEl.style.gridTemplateRows = '1fr';
-      }
-
-      panes.forEach((pane, idx) => {
-        const card = document.createElement('section');
-        card.className = 'terminal-pane' + (pane.id === active.activePaneId ? ' active' : '');
-        card.onclick = () => {
-          if (active.activePaneId !== pane.id) {
-            active.activePaneId = pane.id;
-            renderOutput();
-          }
-        };
-
-        const hdr = document.createElement('div');
-        hdr.className = 'pane-header';
-        const title = document.createElement('span');
-        title.textContent = `Pane ${idx + 1} · ${pane.id}`;
-        const hdrActions = document.createElement('div');
-        hdrActions.className = 'pane-header-actions';
-        const splitVBtn = document.createElement('button');
-        splitVBtn.type = 'button';
-        splitVBtn.textContent = '◫';
-        splitVBtn.title = 'Split vertically (Cmd/Ctrl+D)';
-        splitVBtn.onclick = (ev) => { ev.stopPropagation(); active.activePaneId = pane.id; void splitActivePane('vertical'); };
-        const splitHBtn = document.createElement('button');
-        splitHBtn.type = 'button';
-        splitHBtn.textContent = '⊟';
-        splitHBtn.title = 'Split horizontally (Cmd/Ctrl+Shift+D)';
-        splitHBtn.onclick = (ev) => { ev.stopPropagation(); active.activePaneId = pane.id; void splitActivePane('horizontal'); };
-        const closeBtn = document.createElement('button');
-        closeBtn.type = 'button';
-        closeBtn.textContent = '×';
-        closeBtn.title = 'Close pane (Cmd/Ctrl+W)';
-        closeBtn.onclick = (ev) => { ev.stopPropagation(); void closeActivePane(pane.id); };
-        hdrActions.append(splitVBtn, splitHBtn, closeBtn);
-        hdr.append(title, hdrActions);
-
-        const pre = document.createElement('pre');
-        pre.className = 'pane-output';
-        pre.tabIndex = 0;
-        pre.textContent = pane.buffer;
-        pre.onfocus = () => { active.activePaneId = pane.id; };
-        pre.addEventListener('keydown', async (e) => {
-          if (e.metaKey || e.ctrlKey || e.altKey) return;
-          if (!invoke) return;
-          if (e.key === 'Enter') { e.preventDefault(); await invoke('pty_write', { sessionId: pane.id, data: '\r' }); }
-          else if (e.key === 'Backspace') { e.preventDefault(); await invoke('pty_write', { sessionId: pane.id, data: '\x7f' }); }
-          else if (e.key === 'Tab') { e.preventDefault(); await invoke('pty_write', { sessionId: pane.id, data: '\t' }); }
-          else if (e.key === 'ArrowUp') { e.preventDefault(); await invoke('pty_write', { sessionId: pane.id, data: '\x1b[A' }); }
-          else if (e.key === 'ArrowDown') { e.preventDefault(); await invoke('pty_write', { sessionId: pane.id, data: '\x1b[B' }); }
-          else if (e.key === 'ArrowRight') { e.preventDefault(); await invoke('pty_write', { sessionId: pane.id, data: '\x1b[C' }); }
-          else if (e.key === 'ArrowLeft') { e.preventDefault(); await invoke('pty_write', { sessionId: pane.id, data: '\x1b[D' }); }
-          else if (e.key.length === 1) { e.preventDefault(); await invoke('pty_write', { sessionId: pane.id, data: e.key }); }
-        });
-
-        card.append(hdr, pre);
-        outputEl.appendChild(card);
-        pre.scrollTop = pre.scrollHeight;
-      });
-    }
-
-    async function createTab() {
-      if (!invoke) {
-        const id = 'web-' + (tabs.length + 1) + '-p1';
-        tabs.push({
-          id,
-          splitDirection: 'vertical',
-          activePaneId: id,
-          panes: [{ id, buffer: '[Wazir Shell preview mode — launch via Tauri for native PTY]\n' }],
-        });
-        activeId = id;
-        renderTabs(); renderOutput();
-        return;
-      }
-      const id = await invoke('pty_spawn', { cols: 120, rows: 32, cwd: null });
-      tabs.push({
-        id,
-        splitDirection: 'vertical',
-        activePaneId: id,
-        panes: [{ id, buffer: '' }],
-      });
-      activeId = id;
-      renderTabs(); renderOutput();
-    }
-
-    async function splitActivePane(direction = 'vertical') {
-      const active = getActiveTab();
-      if (!active) return;
-      active.splitDirection = direction;
-      if (!invoke) {
-        const paneId = `${active.id}-p${active.panes.length + 1}-${Date.now().toString(36).slice(-3)}`;
-        active.panes.push({ id: paneId, buffer: `[Tiled ${direction} pane ${active.panes.length + 1}]\n` });
-        active.activePaneId = paneId;
-        renderOutput();
-        return;
-      }
-      const cols = direction === 'vertical' ? Math.max(40, Math.floor(120 / (active.panes.length + 1))) : 120;
-      const rows = direction === 'horizontal' ? Math.max(12, Math.floor(32 / (active.panes.length + 1))) : 32;
-      const paneId = await invoke('pty_spawn', { cols, rows, cwd: null });
-      active.panes.push({ id: paneId, buffer: '' });
-      active.activePaneId = paneId;
-      renderOutput();
-    }
-
-    async function closeActivePane(targetPaneId) {
-      const active = getActiveTab();
-      if (!active) return;
-      const paneId = targetPaneId || active.activePaneId;
-      if (active.panes.length <= 1) return;
-      const idx = active.panes.findIndex((p) => p.id === paneId);
-      if (idx === -1) return;
-      if (invoke) {
-        try { await invoke('pty_close', { sessionId: paneId }); } catch {}
-      }
-      active.panes.splice(idx, 1);
-      active.activePaneId = active.panes[Math.max(0, idx - 1)].id;
-      renderOutput();
-    }
-
-    function cyclePaneFocus(delta = 1) {
-      const active = getActiveTab();
-      if (!active || active.panes.length <= 1) return;
-      const idx = active.panes.findIndex((p) => p.id === active.activePaneId);
-      const nextIdx = (idx + delta + active.panes.length) % active.panes.length;
-      active.activePaneId = active.panes[nextIdx].id;
-      renderOutput();
-    }
-
-    function isLikelyShell(line) {
-      const t = line.trim();
-      if (!t) return true;
-      if (t.startsWith('!')) return true;
-      if (t.startsWith('?')) return false;
-      if (/[|><;]|&&|\|\|/.test(t) || /^(\.\/|\.\.\/|\/|~\/)/.test(t)) return true;
-      const first = t.split(/\s+/)[0];
-      return ['cd','ls','pwd','git','grep','rg','cat','echo','export','ssh','docker','npm','node','python3','cargo','which','env'].includes(first);
-    }
-
-    cmdForm.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const raw = cmdInput.value.trim();
-      if (!raw || !activeId) return;
-      cmdInput.value = '';
-      updateRouteBadge();
-      const active = tabs.find(t => t.id === activeId);
-      const mode = modeSelect.value;
-
-      // Slash workflow commands always route through shared Wazir workflow IPC
-      if (/^\/jobs\b/i.test(raw)) {
-        setDrawerOpen(true);
-        await refreshWorkflowJobs();
-        return;
-      }
-      if (/^\/inspect\s+/i.test(raw)) {
-        const id = raw.replace(/^\/inspect\s+/i, '').trim();
-        if (id) await inspectWorkflowJob(id);
-        return;
-      }
-      const ctrlMatch = raw.match(/^\/(pause|resume|stop)\s+(\S+)/i);
-      if (ctrlMatch) {
-        await controlWorkflowJob(ctrlMatch[1].toLowerCase(), ctrlMatch[2]);
-        return;
-      }
-      if (/^\/(loop|graph|goal)\s+/i.test(raw)) {
-        const [, wfMode, rest] = raw.match(/^\/(loop|graph|goal)\s+([\s\S]+)$/i);
-        await dispatchWorkflow(wfMode.toLowerCase(), rest.trim());
-        return;
-      }
-      if (mode === 'loop' || mode === 'graph' || mode === 'goal') {
-        await dispatchWorkflow(mode, raw);
-        return;
-      }
-
-      const runAsShell = mode === 'shell' || (mode === 'auto' && isLikelyShell(raw));
-      const clean = raw.replace(/^[!?]\s*/, '');
-
-      if (runAsShell) {
-        if (invoke) {
-          await invoke('pty_write', { sessionId: activeId, data: clean + '\n' });
-        } else {
-          active.buffer += `$ ${clean}\n[PTY unavailable in browser preview]\n`;
-          renderOutput();
-        }
-      } else {
-        active.buffer += `\n[AI] Dispatching governed task: ${clean}\n`;
-        renderOutput();
-        if (invoke) {
-          try {
-            const res = await invoke('run_wazir_ai_task', { prompt: clean, cwd: null });
-            active.buffer += res + '\n';
-          } catch (err) {
-            active.buffer += `[wazir-ai error] ${err}\n`;
-          }
-          renderOutput();
-        }
-      }
-    });
-
-    jobsDrawerBtn.onclick = () => {
-      setDrawerOpen(!jobsDrawerEl.classList.contains('open'));
-    };
-    document.getElementById('close-drawer-btn').onclick = () => setDrawerOpen(false);
-    document.getElementById('refresh-jobs-btn').onclick = () => { void refreshWorkflowJobs(); };
-    document.querySelectorAll('.filter-btn').forEach((btn) => {
-      btn.onclick = () => {
-        workflowModeFilter = btn.dataset.mode || 'all';
-        document.querySelectorAll('.filter-btn').forEach((b) => b.classList.toggle('active-pill', b === btn));
-        renderWorkflowJobs();
-      };
-    });
-    function triggerLauncher(wfMode) {
-      const promptText = cmdInput.value.trim();
-      if (promptText) {
-        cmdInput.value = '';
-        updateRouteBadge();
-        void dispatchWorkflow(wfMode, promptText);
-      } else {
-        modeSelect.value = wfMode;
-        updateRouteBadge();
-        cmdInput.focus();
-      }
-    }
-    document.getElementById('launch-loop-btn').onclick = () => triggerLauncher('loop');
-    document.getElementById('launch-graph-btn').onclick = () => triggerLauncher('graph');
-    document.getElementById('launch-goal-btn').onclick = () => triggerLauncher('goal');
-
-    document.getElementById('ctrlc-btn').onclick = async () => {
-      if (invoke && activeId) await invoke('pty_write', { sessionId: activeId, data: '\x03' });
-    };
-    document.getElementById('clear-btn').onclick = () => {
-      const active = tabs.find(t => t.id === activeId);
-      if (active) { active.buffer = ''; renderOutput(); }
-    };
-    outputEl.addEventListener('keydown', async (e) => {
-      if (!invoke || !activeId) return;
-      if (e.ctrlKey && e.key.toLowerCase() === 'c') {
-        e.preventDefault();
-        await invoke('pty_write', { sessionId: activeId, data: '\x03' });
-      } else if (e.ctrlKey && e.key.toLowerCase() === 'd') {
-        e.preventDefault();
-        await invoke('pty_write', { sessionId: activeId, data: '\x04' });
-      } else if (e.key === 'Enter') {
-        e.preventDefault();
-        await invoke('pty_write', { sessionId: activeId, data: '\r' });
-      } else if (e.key === 'Backspace') {
-        e.preventDefault();
-        await invoke('pty_write', { sessionId: activeId, data: '\x7f' });
-      } else if (e.key === 'Tab') {
-        e.preventDefault();
-        await invoke('pty_write', { sessionId: activeId, data: '\t' });
-      } else if (e.key.length === 1 && !e.metaKey && !e.ctrlKey) {
-        e.preventDefault();
-        await invoke('pty_write', { sessionId: activeId, data: e.key });
-      }
-    });
-    window.addEventListener('resize', async () => {
-      resizeActivePty();
-    });
-
-    document.getElementById('new-tab-btn').onclick = createTab;
-    document.getElementById('mc-btn').onclick = () => invoke && invoke('open_mission_control');
-    document.getElementById('about-btn').onclick = async () => {
-      const modal = document.getElementById('about-modal');
-      const body = document.getElementById('about-body');
-      body.textContent = '';
-      const appendLine = (label, value) => {
-        const p = document.createElement('p');
-        if (label) {
-          const strong = document.createElement('strong');
-          strong.textContent = label;
-          p.appendChild(strong);
-        }
-        p.appendChild(document.createTextNode(value));
-        body.appendChild(p);
-      };
-      if (invoke) {
-        const info = await invoke('get_about_info');
-        appendLine(info.name, ` v${info.version}`);
-        appendLine('', `Author: ${info.author}`);
-        appendLine('', `Repo: ${info.repository}`);
-        appendLine('', `Website: ${info.website}`);
-        appendLine('', `License: ${info.license}`);
-      } else {
-        appendLine('Wazir Shell', ' v0.4.1 — Wael Hassan (whassan007)');
-      }
-      modal.style.display = 'flex';
-    };
-    document.getElementById('about-close').onclick = () => {
-      document.getElementById('about-modal').style.display = 'none';
-    };
-
-    function initConsent() {
-      const saved = localStorage.getItem('wazir_shell_consent_v1');
-      if (!saved) {
-        document.getElementById('consent-modal').style.display = 'flex';
-      } else {
-        const parsed = JSON.parse(saved);
-        diagBadge.textContent = parsed.accepted ? 'Diagnostics: Enabled' : 'Diagnostics: Disabled';
-      }
-      document.getElementById('accept-btn').onclick = () => {
-        const rich = document.getElementById('rich-optin').checked;
-        localStorage.setItem('wazir_shell_consent_v1', JSON.stringify({ accepted: true, rich, at: new Date().toISOString() }));
-        diagBadge.textContent = 'Diagnostics: Enabled';
-        document.getElementById('consent-modal').style.display = 'none';
-      };
-      document.getElementById('decline-btn').onclick = () => {
-        localStorage.setItem('wazir_shell_consent_v1', JSON.stringify({ accepted: false, rich: false, at: new Date().toISOString() }));
-        diagBadge.textContent = 'Diagnostics: Disabled';
-        document.getElementById('consent-modal').style.display = 'none';
-      };
-    }
-
-    if (listen) {
-      listen('pty-output', (ev) => {
-        const { session_id, data } = ev.payload;
-        const found = findPaneBySessionId(session_id);
-        if (found) {
-          found.pane.buffer += stripAnsi(data);
-          if (found.pane.buffer.length > 200000) found.pane.buffer = found.pane.buffer.slice(-150000);
-          if (found.tab.id === activeId) renderOutput();
-        }
-      });
-      listen('wazir-menu', (ev) => {
-        if (ev.payload === 'new_tab') createTab();
-        if (ev.payload === 'about') document.getElementById('about-btn').click();
-      });
-    }
-
-    // Command Palette (Cmd/Ctrl+K) + Tiling Shortcuts
-    const paletteModal = document.getElementById('command-palette-modal');
-    const paletteSearch = document.getElementById('palette-search');
-    const paletteList = document.getElementById('palette-list');
-    let paletteItems = [];
-    let paletteSelectedIdx = 0;
-
-    function buildPaletteItems() {
-      const items = [
-        { id: 'pane:split-v', cat: 'Pane', title: 'Split Pane Vertically', desc: 'Cmd/Ctrl+D', run: () => splitActivePane('vertical') },
-        { id: 'pane:split-h', cat: 'Pane', title: 'Split Pane Horizontally', desc: 'Cmd/Ctrl+Shift+D', run: () => splitActivePane('horizontal') },
-        { id: 'pane:next', cat: 'Pane', title: 'Focus Next Pane', desc: 'Alt+ArrowRight', run: () => cyclePaneFocus(1) },
-        { id: 'pane:close', cat: 'Pane', title: 'Close Active Pane', desc: 'Cmd/Ctrl+W', run: () => closeActivePane() },
-        { id: 'tab:new', cat: 'Tab', title: 'New Terminal Tab', desc: 'Open a fresh PTY tab', run: () => createTab() },
-      ];
-      for (const [id, preset] of Object.entries(WAZIR_THEMES)) {
-        items.push({ id: `theme:${id}`, cat: 'Theme', title: `Theme: ${preset.name}`, desc: `Switch surface to ${id}`, run: () => applyTheme(id, true) });
-      }
-      for (const m of ['auto', 'shell', 'ai', 'loop', 'graph', 'goal']) {
-        items.push({ id: `mode:${m}`, cat: 'Mode', title: `Routing Mode: ${m}`, desc: `Set command bar mode to ${m}`, run: () => { modeSelect.value = m; updateRouteBadge(); } });
-      }
-      for (const c of customCommands) {
-        items.push({
-          id: `cmd:${c.name}`,
-          cat: 'Custom',
-          title: `Run: ${c.name}`,
-          desc: c.description || c.command,
-          run: () => {
-            cmdInput.value = c.command;
-            cmdForm.dispatchEvent(new Event('submit', { cancelable: true }));
-          },
-        });
-      }
-      return items;
-    }
-
-    function renderPaletteList() {
-      const q = paletteSearch.value.trim().toLowerCase();
-      const all = buildPaletteItems();
-      paletteItems = q ? all.filter((i) => i.title.toLowerCase().includes(q) || i.desc.toLowerCase().includes(q) || i.cat.toLowerCase().includes(q)) : all;
-      if (paletteSelectedIdx >= paletteItems.length) paletteSelectedIdx = Math.max(0, paletteItems.length - 1);
-      paletteList.innerHTML = '';
-      paletteItems.forEach((item, idx) => {
-        const row = document.createElement('div');
-        row.className = 'palette-item' + (idx === paletteSelectedIdx ? ' selected' : '');
-        row.innerHTML = `<div><div class="palette-item-title">${item.title}</div><div class="palette-item-desc">${item.desc}</div></div><span class="palette-item-cat">${item.cat}</span>`;
-        row.onclick = async () => {
-          closeCommandPalette();
-          await item.run();
-        };
-        paletteList.appendChild(row);
-      });
-    }
-
-    function openCommandPalette() {
-      paletteSelectedIdx = 0;
-      paletteSearch.value = '';
-      renderPaletteList();
-      paletteModal.style.display = 'flex';
-      paletteSearch.focus();
-    }
-
-    function closeCommandPalette() {
-      paletteModal.style.display = 'none';
-    }
-
-    paletteSearch.addEventListener('input', () => { paletteSelectedIdx = 0; renderPaletteList(); });
-    paletteSearch.addEventListener('keydown', async (e) => {
-      if (e.key === 'Escape') { e.preventDefault(); closeCommandPalette(); }
-      else if (e.key === 'ArrowDown') { e.preventDefault(); paletteSelectedIdx = Math.min(paletteItems.length - 1, paletteSelectedIdx + 1); renderPaletteList(); }
-      else if (e.key === 'ArrowUp') { e.preventDefault(); paletteSelectedIdx = Math.max(0, paletteSelectedIdx - 1); renderPaletteList(); }
-      else if (e.key === 'Enter' && paletteItems[paletteSelectedIdx]) {
-        e.preventDefault();
-        const item = paletteItems[paletteSelectedIdx];
-        closeCommandPalette();
-        await item.run();
-      }
-    });
-    paletteModal.addEventListener('click', (e) => { if (e.target === paletteModal) closeCommandPalette(); });
-
-    document.getElementById('palette-btn').onclick = () => openCommandPalette();
-    document.getElementById('split-v-btn').onclick = () => void splitActivePane('vertical');
-    document.getElementById('split-h-btn').onclick = () => void splitActivePane('horizontal');
-
-    window.addEventListener('keydown', (e) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
-        e.preventDefault();
-        if (paletteModal.style.display === 'flex') closeCommandPalette();
-        else openCommandPalette();
-      } else if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'd') {
-        e.preventDefault();
-        void splitActivePane('horizontal');
-      } else if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === 'd') {
-        e.preventDefault();
-        void splitActivePane('vertical');
-      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'w') {
-        const active = getActiveTab();
-        if (active && active.panes.length > 1) {
-          e.preventDefault();
-          void closeActivePane();
-        }
-      } else if (e.altKey && (e.key === 'ArrowRight' || e.key === 'ArrowDown')) {
-        e.preventDefault();
-        cyclePaneFocus(1);
-      } else if (e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowUp')) {
-        e.preventDefault();
-        cyclePaneFocus(-1);
-      }
-    });
-
-    initConsent();
-    void initTheme();
-    void loadCustomCommands();
-    createTab();
-    void refreshWorkflowJobs();
-  </script>
-  <div class="modal-backdrop" id="command-palette-modal" style="display:none;">
-    <div class="modal-card palette-card" role="dialog" aria-modal="true" aria-label="Wazir Command Palette">
+    <!-- 4. COMMAND_PALETTE -->
+    <section class="modal-dialog palette-dialog" id="modal-palette" data-modal-state="COMMAND_PALETTE" role="dialog" aria-modal="true" aria-label="Command Palette" hidden>
       <div class="palette-input-wrap">
-        <input id="palette-search" class="palette-input" type="text" placeholder="Type a command, theme, mode, or pane action..." autocomplete="off" />
+        <input id="palette-search" class="palette-input" type="text" placeholder="Type a command, theme, mode, or action..." autocomplete="off" />
       </div>
-      <div class="palette-list" id="palette-list"></div>
-    </div>
+      <div class="palette-list" id="palette-list" role="listbox"></div>
+    </section>
+
+    <!-- 5. SETTINGS -->
+    <section class="modal-dialog" id="modal-settings" data-modal-state="SETTINGS" role="dialog" aria-modal="true" aria-labelledby="settings-title" hidden>
+      <h2 id="settings-title">Wazir Shell Settings</h2>
+      <div class="settings-grid">
+        <label class="field-row">
+          <span>Theme</span>
+          <select id="setting-theme"></select>
+        </label>
+        <label class="field-row">
+          <span>Terminal Font Size (px)</span>
+          <input id="setting-fontsize" type="number" min="10" max="24" value="13" />
+        </label>
+        <label class="field-row">
+          <span>Default Operating Mode</span>
+          <select id="setting-mode">
+            <option value="auto">Auto</option>
+            <option value="shell">Native shell</option>
+            <option value="ai">AI prompt</option>
+            <option value="workflow">Workflow</option>
+            <option value="remote">Remote execution</option>
+          </select>
+        </label>
+        <label class="field-row">
+          <span>AI Permission Policy</span>
+          <select id="setting-permissions">
+            <option value="auto">Auto (safe workspace)</option>
+            <option value="ask">Ask before mutations</option>
+            <option value="read-only">Read-only</option>
+          </select>
+        </label>
+        <label class="field-row">
+          <span>Diagnostic Telemetry</span>
+          <button type="button" id="setting-diag-btn">Review / Change Consent</button>
+        </label>
+      </div>
+      <div class="modal-actions">
+        <button type="button" id="settings-cancel-btn">Cancel</button>
+        <button type="button" id="settings-save-btn" class="primary">Save Settings</button>
+      </div>
+    </section>
+
+    <!-- 6. APPROVAL -->
+    <section class="modal-dialog" id="modal-approval" data-modal-state="APPROVAL" role="dialog" aria-modal="true" aria-labelledby="approval-title" hidden>
+      <h2 id="approval-title">Action Approval Required</h2>
+      <p id="approval-summary" class="modal-subtitle"></p>
+      <pre id="approval-details" class="approval-details"></pre>
+      <div class="modal-actions">
+        <button type="button" id="approval-deny-btn" class="danger-btn">Deny</button>
+        <button type="button" id="approval-approve-btn" class="primary">Approve</button>
+      </div>
+    </section>
+
+    <!-- 7. ERROR -->
+    <section class="modal-dialog" id="modal-error" data-modal-state="ERROR" role="dialog" aria-modal="true" aria-labelledby="error-title" hidden>
+      <h2 id="error-title">Error</h2>
+      <p id="error-message" class="modal-subtitle"></p>
+      <div class="modal-actions">
+        <button type="button" id="error-close-btn" class="primary">Dismiss</button>
+      </div>
+    </section>
   </div>
+
+  <script src="app.js"></script>
 </body>
 </html>

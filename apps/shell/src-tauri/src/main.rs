@@ -4,18 +4,22 @@ use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{Emitter, Manager, State};
 use tauri_plugin_opener::OpenerExt;
 
 const MAX_PTY_SESSIONS: usize = 32;
+const DIAGNOSTIC_NOTICE_VERSION: &str = "2026-11-20.1";
 
 struct PtySession {
     master: Box<dyn MasterPty + Send>,
     writer: Box<dyn Write + Send>,
     child: Box<dyn portable_pty::Child + Send + Sync>,
+    pid: Option<u32>,
+    shell: String,
+    cwd: String,
 }
 
 #[derive(Default)]
@@ -30,7 +34,13 @@ struct PtyOutputEvent {
     data: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
+struct PtyExitEvent {
+    session_id: String,
+    exit_code: Option<u32>,
+}
+
+#[derive(Serialize, Clone)]
 struct AboutInfo {
     name: &'static str,
     version: &'static str,
@@ -38,27 +48,131 @@ struct AboutInfo {
     repository: &'static str,
     website: &'static str,
     license: &'static str,
+    third_party: &'static str,
 }
 
-fn default_shell() -> String {
-    std::env::var("SHELL").unwrap_or_else(|_| {
-        if cfg!(target_os = "windows") {
-            "cmd.exe".to_string()
-        } else {
-            "/bin/zsh".to_string()
+fn is_executable_file(path: &str) -> bool {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let p = Path::new(trimmed);
+    if !p.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(p) {
+            return meta.permissions().mode() & 0o111 != 0;
         }
-    })
+        false
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
+fn discover_user_shell() -> String {
+    if cfg!(target_os = "windows") {
+        return std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string());
+    }
+
+    let settings_path = resolve_wazir_home_dir().join("shell-settings.json");
+    if let Ok(raw) = std::fs::read_to_string(&settings_path) {
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&raw) {
+            if let Some(pref) = val.get("preferredShell").and_then(|v| v.as_str()) {
+                if is_executable_file(pref) {
+                    return pref.to_string();
+                }
+            }
+        }
+    }
+
+    if let Ok(env_shell) = std::env::var("SHELL") {
+        if is_executable_file(&env_shell) {
+            return env_shell;
+        }
+    }
+
+    let user = std::env::var("USER")
+        .or_else(|_| std::env::var("LOGNAME"))
+        .unwrap_or_default();
+    if !user.is_empty() {
+        if let Ok(passwd) = std::fs::read_to_string("/etc/passwd") {
+            for line in passwd.lines() {
+                let mut parts = line.split(':');
+                if parts.next() == Some(user.as_str()) {
+                    if let Some(shell) = parts.nth(5) {
+                        if is_executable_file(shell) {
+                            return shell.to_string();
+                        }
+                    }
+                }
+            }
+        }
+        #[cfg(target_os = "macos")]
+        {
+            if let Ok(out) = std::process::Command::new("/usr/bin/dscl")
+                .args([".", "-read", &format!("/Users/{user}"), "UserShell"])
+                .output()
+            {
+                if out.status.success() {
+                    let stdout = String::from_utf8_lossy(&out.stdout);
+                    if let Some(shell) = stdout.split_whitespace().last() {
+                        if is_executable_file(shell) {
+                            return shell.to_string();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    for candidate in ["/bin/zsh", "/usr/bin/zsh", "/bin/bash", "/usr/bin/bash", "/bin/sh"] {
+        if is_executable_file(candidate) {
+            return candidate.to_string();
+        }
+    }
+    "/bin/sh".to_string()
+}
+
+fn build_augmented_path() -> String {
+    let existing = std::env::var("PATH").unwrap_or_default();
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    let mut parts: Vec<String> = existing
+        .split(':')
+        .filter(|s| !s.trim().is_empty())
+        .map(String::from)
+        .collect();
+    let extras = [
+        "/opt/homebrew/bin".to_string(),
+        "/usr/local/bin".to_string(),
+        format!("{home}/.cargo/bin"),
+        format!("{home}/.local/bin"),
+        "/usr/bin".to_string(),
+        "/bin".to_string(),
+        "/usr/sbin".to_string(),
+        "/sbin".to_string(),
+    ];
+    for extra in extras {
+        if !parts.iter().any(|p| p == &extra) {
+            parts.push(extra);
+        }
+    }
+    parts.join(":")
 }
 
 fn resolve_node_binary() -> String {
     if let Ok(explicit) = std::env::var("WAZIR_NODE_BIN") {
         let trimmed = explicit.trim();
-        if !trimmed.is_empty() && std::path::Path::new(trimmed).exists() {
+        if !trimmed.is_empty() && Path::new(trimmed).exists() {
             return trimmed.to_string();
         }
     }
     for candidate in ["/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"] {
-        if std::path::Path::new(candidate).exists() {
+        if Path::new(candidate).exists() {
             return candidate.to_string();
         }
     }
@@ -68,8 +182,30 @@ fn resolve_node_binary() -> String {
 fn resolve_wa_binary() -> String {
     if let Ok(explicit) = std::env::var("WAZIR_CLI_BIN") {
         let trimmed = explicit.trim();
-        if !trimmed.is_empty() && std::path::Path::new(trimmed).exists() {
+        if !trimmed.is_empty() && Path::new(trimmed).exists() {
             return trimmed.to_string();
+        }
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let adjacent_js = dir.join("wa.js");
+            if adjacent_js.exists() {
+                return adjacent_js.to_string_lossy().to_string();
+            }
+            let adjacent_bin = dir.join("wa");
+            if adjacent_bin.exists() {
+                return adjacent_bin.to_string_lossy().to_string();
+            }
+        }
+    }
+    for candidate in [
+        "/usr/lib/wazir/wa.js",
+        "/usr/bin/wa",
+        "/usr/local/bin/wa",
+        "/opt/homebrew/bin/wa",
+    ] {
+        if Path::new(candidate).exists() {
+            return candidate.to_string();
         }
     }
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -89,9 +225,11 @@ fn build_wa_command(cwd: Option<&str>) -> std::process::Command {
     } else {
         std::process::Command::new(&wa_path)
     };
+    cmd.env("PATH", build_augmented_path());
+    cmd.env("WAZIR_HOME", resolve_wazir_home_dir());
     if let Some(dir) = cwd {
         let trimmed = dir.trim();
-        if !trimmed.is_empty() && std::path::Path::new(trimmed).is_dir() {
+        if !trimmed.is_empty() && Path::new(trimmed).is_dir() {
             cmd.current_dir(trimmed);
         }
     }
@@ -135,21 +273,30 @@ fn pty_spawn(
         })
         .map_err(|e| format!("openpty failed: {e}"))?;
 
-    let mut cmd = CommandBuilder::new(default_shell());
-    if let Some(dir) = cwd {
-        if !dir.trim().is_empty() {
-            cmd.cwd(dir);
-        }
-    } else if let Ok(home) = std::env::var("HOME") {
-        cmd.cwd(home);
-    }
+    let shell_path = discover_user_shell();
+    let resolved_cwd = cwd
+        .as_deref()
+        .map(str::trim)
+        .filter(|d| !d.is_empty() && Path::new(d).is_dir())
+        .map(String::from)
+        .or_else(|| std::env::var("HOME").ok())
+        .unwrap_or_else(|| ".".to_string());
+
+    let mut cmd = CommandBuilder::new(&shell_path);
+    cmd.cwd(&resolved_cwd);
     cmd.env("TERM", "xterm-256color");
+    cmd.env("COLORTERM", "truecolor");
+    cmd.env("PATH", build_augmented_path());
     cmd.env("WAZIR_SHELL", "1");
+    if std::env::var("LANG").unwrap_or_default().is_empty() {
+        cmd.env("LANG", "en_US.UTF-8");
+    }
 
     let child = pair
         .slave
         .spawn_command(cmd)
-        .map_err(|e| format!("spawn_command failed: {e}"))?;
+        .map_err(|e| format!("spawn_command failed for {shell_path}: {e}"))?;
+    let child_pid = child.process_id();
 
     let mut reader = pair
         .master
@@ -182,6 +329,9 @@ fn pty_spawn(
                 master: pair.master,
                 writer,
                 child,
+                pid: child_pid,
+                shell: shell_path,
+                cwd: resolved_cwd,
             },
         );
 
@@ -204,6 +354,13 @@ fn pty_spawn(
                 Err(_) => break,
             }
         }
+        let _ = app.emit(
+            "pty-exit",
+            PtyExitEvent {
+                session_id: sid,
+                exit_code: None,
+            },
+        );
     });
 
     Ok(session_id)
@@ -253,9 +410,76 @@ fn pty_close(state: State<'_, ShellState>, session_id: String) -> Result<(), Str
     Ok(())
 }
 
+fn detect_process_cwd(pid: u32) -> Option<String> {
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(link) = std::fs::read_link(format!("/proc/{pid}/cwd")) {
+            return link.to_str().map(String::from);
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(out) = std::process::Command::new("/usr/sbin/lsof")
+            .args(["-a", "-p", &pid.to_string(), "-d", "cwd", "-Fn"])
+            .output()
+        {
+            if out.status.success() {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                for line in stdout.lines() {
+                    if let Some(rest) = line.strip_prefix('n') {
+                        if !rest.is_empty() && Path::new(rest).is_dir() {
+                            return Some(rest.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let _ = pid;
+    None
+}
+
 #[tauri::command]
-fn run_wazir_ai_task(prompt: String, cwd: Option<String>) -> Result<String, String> {
-    run_wa_subcommand(vec!["exec".into(), "--json".into(), prompt], cwd)
+fn pty_get_info(state: State<'_, ShellState>, session_id: String) -> Result<serde_json::Value, String> {
+    let mut guard = state.sessions.lock().map_err(|_| "lock poisoned")?;
+    let session = guard
+        .get_mut(&session_id)
+        .ok_or_else(|| format!("unknown session {session_id}"))?;
+    if let Some(pid) = session.pid {
+        if let Some(live_cwd) = detect_process_cwd(pid) {
+            session.cwd = live_cwd;
+        }
+    }
+    Ok(serde_json::json!({
+        "session_id": session_id,
+        "shell": session.shell,
+        "cwd": session.cwd,
+    }))
+}
+
+#[tauri::command]
+async fn run_wazir_ai_task(
+    prompt: String,
+    cwd: Option<String>,
+    model: Option<String>,
+    permission_mode: Option<String>,
+) -> Result<String, String> {
+    let trimmed = prompt.trim().to_string();
+    if trimmed.is_empty() {
+        return Err("AI prompt must not be empty".to_string());
+    }
+    let mut args = vec!["shell".to_string(), "-c".to_string(), trimmed];
+    if let Some(m) = model.as_deref().map(str::trim).filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("auto")) {
+        args.push("--model".to_string());
+        args.push(m.to_string());
+    }
+    if let Some(perm) = permission_mode.as_deref().map(str::trim).filter(|s| matches!(*s, "ask" | "auto" | "read-only")) {
+        args.push("--permissions".to_string());
+        args.push(perm.to_string());
+    }
+    tauri::async_runtime::spawn_blocking(move || run_wa_subcommand(args, cwd))
+        .await
+        .map_err(|e| format!("AI task join failed: {e}"))?
 }
 
 #[tauri::command]
@@ -380,15 +604,15 @@ const SUPPORTED_THEME_IDS: &[&str] = &[
     "wazir-light",
 ];
 
-fn resolve_wazir_home_dir() -> std::path::PathBuf {
+fn resolve_wazir_home_dir() -> PathBuf {
     if let Ok(custom) = std::env::var("WAZIR_HOME") {
         let trimmed = custom.trim();
         if !trimmed.is_empty() {
-            return std::path::PathBuf::from(trimmed);
+            return PathBuf::from(trimmed);
         }
     }
     if let Ok(home) = std::env::var("HOME") {
-        return std::path::PathBuf::from(home).join(".wazir");
+        return PathBuf::from(home).join(".wazir");
     }
     std::env::temp_dir().join(".wazir")
 }
@@ -492,6 +716,129 @@ fn save_wazir_custom_command(
     Ok(payload)
 }
 
+fn read_consent_json() -> serde_json::Value {
+    let path = resolve_wazir_home_dir().join("consent.json");
+    if let Ok(raw) = std::fs::read_to_string(&path) {
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&raw) {
+            return val;
+        }
+    }
+    serde_json::json!({
+        "noticeVersion": DIAGNOSTIC_NOTICE_VERSION,
+        "accepted": false,
+        "declined": false,
+        "richAnalytics": false,
+        "configuredLater": false,
+        "onboardingCompleted": false,
+        "installationId": null,
+        "updatedAt": null
+    })
+}
+
+fn write_restrictive_json(path: &Path, payload: &serde_json::Value) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("Failed to create dir: {e}"))?;
+    }
+    let serialized = serde_json::to_string_pretty(payload).map_err(|e| e.to_string())?;
+    std::fs::write(path, format!("{serialized}\n")).map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn set_consent_state(
+    accepted: bool,
+    declined: bool,
+    rich_analytics: bool,
+    configured_later: bool,
+    onboarding_completed: bool,
+) -> Result<serde_json::Value, String> {
+    let home = resolve_wazir_home_dir();
+    let existing = read_consent_json();
+    let installation_id = existing
+        .get("installationId")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .unwrap_or_else(|| {
+            let secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            format!("wazir-shell-{:x}", secs)
+        });
+    let updated_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs().to_string())
+        .unwrap_or_default();
+
+    let payload = serde_json::json!({
+        "noticeVersion": DIAGNOSTIC_NOTICE_VERSION,
+        "accepted": accepted && !declined,
+        "declined": declined,
+        "richAnalytics": accepted && !declined && rich_analytics,
+        "configuredLater": configured_later,
+        "onboardingCompleted": onboarding_completed,
+        "installationId": installation_id,
+        "updatedAt": updated_at
+    });
+    write_restrictive_json(&home.join("consent.json"), &payload)?;
+
+    // Enforce zero diagnostic uploads/events when declined or not accepted
+    if declined || !accepted {
+        let queue_path = home.join("diagnostics-queue.jsonl");
+        if queue_path.exists() {
+            let _ = std::fs::remove_file(&queue_path);
+        }
+    }
+    Ok(payload)
+}
+
+#[tauri::command]
+fn save_shell_settings(settings: serde_json::Value) -> Result<serde_json::Value, String> {
+    let home = resolve_wazir_home_dir();
+    if let Some(theme_id) = settings.get("themeId").and_then(|v| v.as_str()) {
+        if SUPPORTED_THEME_IDS.contains(&theme_id) {
+            let _ = set_wazir_theme(theme_id.to_string());
+        }
+    }
+    let path = home.join("shell-settings.json");
+    write_restrictive_json(&path, &settings)?;
+    Ok(settings)
+}
+
+fn read_shell_settings() -> serde_json::Value {
+    let path = resolve_wazir_home_dir().join("shell-settings.json");
+    if let Ok(raw) = std::fs::read_to_string(&path) {
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&raw) {
+            return val;
+        }
+    }
+    let theme = get_wazir_theme()
+        .ok()
+        .and_then(|v| v.get("themeId").and_then(|t| t.as_str()).map(String::from))
+        .unwrap_or_else(|| "tokyo-night".to_string());
+    serde_json::json!({
+        "themeId": theme,
+        "fontSize": 13,
+        "defaultMode": "auto",
+        "permissionMode": "auto",
+        "pinnedModel": "auto",
+        "remoteHostId": null
+    })
+}
+
+fn count_diagnostic_queue() -> usize {
+    let queue_path = resolve_wazir_home_dir().join("diagnostics-queue.jsonl");
+    std::fs::read_to_string(queue_path)
+        .map(|s| s.lines().filter(|l| !l.trim().is_empty()).count())
+        .unwrap_or(0)
+}
+
 #[tauri::command]
 fn get_about_info() -> AboutInfo {
     AboutInfo {
@@ -500,8 +847,89 @@ fn get_about_info() -> AboutInfo {
         author: "Wael Hassan (whassan007)",
         repository: "https://github.com/whassan007/wazir",
         website: "https://wazir.wael.bot",
-        license: "AGPL-3.0-only (existing core/CLI) · Source-Available Noncommercial + Commercial Authorization",
+        license: "GNU Affero General Public License v3.0 (AGPL-3.0-only)",
+        third_party: "Includes selective Apache-2.0 components adapted from QwenLM/qwen-code",
     }
+}
+
+#[tauri::command]
+fn get_shell_bootstrap() -> Result<serde_json::Value, String> {
+    let cwd = std::env::current_dir()
+        .ok()
+        .and_then(|p| p.to_str().map(String::from))
+        .or_else(|| std::env::var("HOME").ok())
+        .unwrap_or_else(|| ".".to_string());
+    let custom_commands = list_wazir_custom_commands().unwrap_or_default();
+    let verify_dir = std::env::var("WAZIR_SHELL_VERIFY_DIR").ok();
+    Ok(serde_json::json!({
+        "about": get_about_info(),
+        "discovered_shell": discover_user_shell(),
+        "initial_cwd": cwd,
+        "platform": std::env::consts::OS,
+        "arch": std::env::consts::ARCH,
+        "consent": read_consent_json(),
+        "diagnostic_queue_count": count_diagnostic_queue(),
+        "settings": read_shell_settings(),
+        "custom_commands": custom_commands,
+        "verify_mode": verify_dir.is_some(),
+    }))
+}
+
+#[tauri::command]
+async fn get_wazir_models_fast(refresh: Option<bool>) -> Result<serde_json::Value, String> {
+    if refresh == Some(true) {
+        let out = tauri::async_runtime::spawn_blocking(|| {
+            run_wa_subcommand(vec!["models".into(), "--json".into()], None)
+        })
+        .await
+        .map_err(|e| format!("models refresh join failed: {e}"))?;
+        if let Ok(raw) = out {
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&raw) {
+                return Ok(val);
+            }
+        }
+    }
+    let cache_path = resolve_wazir_home_dir().join("fast-model-cache.json");
+    if let Ok(raw) = std::fs::read_to_string(&cache_path) {
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&raw) {
+            return Ok(val);
+        }
+    }
+    Ok(serde_json::json!({ "entries": [] }))
+}
+
+#[tauri::command]
+fn get_wazir_fleet_fast() -> Result<serde_json::Value, String> {
+    let hosts_path = resolve_wazir_home_dir().join("hosts.json");
+    if let Ok(raw) = std::fs::read_to_string(&hosts_path) {
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&raw) {
+            return Ok(val);
+        }
+    }
+    Ok(serde_json::json!({ "activeHostId": "local", "hosts": [] }))
+}
+
+#[tauri::command]
+fn get_wazir_audit_logs(limit: Option<usize>) -> Result<Vec<serde_json::Value>, String> {
+    let audit_path = resolve_wazir_home_dir().join("audit.jsonl");
+    let max_items = limit.unwrap_or(25).min(100);
+    let Ok(raw) = std::fs::read_to_string(&audit_path) else {
+        return Ok(Vec::new());
+    };
+    let mut items = Vec::new();
+    for line in raw.lines().rev() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(line) {
+            items.push(val);
+            if items.len() >= max_items {
+                break;
+            }
+        }
+    }
+    items.reverse();
+    Ok(items)
 }
 
 #[tauri::command]
@@ -511,12 +939,76 @@ fn open_mission_control(app: tauri::AppHandle) -> Result<(), String> {
         .map_err(|e| format!("failed to open Mission Control: {e}"))
 }
 
+#[tauri::command]
+fn save_verification_artifact(rel_path: String, content: String, is_base64: bool) -> Result<String, String> {
+    let base = std::env::var("WAZIR_SHELL_VERIFY_DIR")
+        .map_err(|_| "verification mode not enabled".to_string())?;
+    if rel_path.contains("..") || rel_path.starts_with('/') {
+        return Err("invalid artifact path".to_string());
+    }
+    let full = PathBuf::from(base).join(&rel_path);
+    if let Some(parent) = full.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    if is_base64 {
+        let decoded = decode_base64(&content)?;
+        std::fs::write(&full, decoded).map_err(|e| e.to_string())?;
+    } else {
+        std::fs::write(&full, content).map_err(|e| e.to_string())?;
+    }
+    Ok(full.to_string_lossy().to_string())
+}
+
+fn decode_base64(input: &str) -> Result<Vec<u8>, String> {
+    let clean: String = input.chars().filter(|c| !c.is_whitespace()).collect();
+    let table = |c: u8| -> Option<u8> {
+        match c {
+            b'A'..=b'Z' => Some(c - b'A'),
+            b'a'..=b'z' => Some(c - b'a' + 26),
+            b'0'..=b'9' => Some(c - b'0' + 52),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    };
+    let bytes = clean.as_bytes();
+    if bytes.len() % 4 != 0 {
+        return Err("invalid base64 length".to_string());
+    }
+    let mut out = Vec::with_capacity(bytes.len() * 3 / 4);
+    for chunk in bytes.chunks(4) {
+        let a = table(chunk[0]).ok_or("invalid base64 char")?;
+        let b = table(chunk[1]).ok_or("invalid base64 char")?;
+        out.push((a << 2) | (b >> 4));
+        if chunk[2] != b'=' {
+            let c = table(chunk[2]).ok_or("invalid base64 char")?;
+            out.push((b << 4) | (c >> 2));
+            if chunk[3] != b'=' {
+                let d = table(chunk[3]).ok_or("invalid base64 char")?;
+                out.push((c << 6) | d);
+            }
+        }
+    }
+    Ok(out)
+}
+
+#[tauri::command]
+fn exit_application(app: tauri::AppHandle, code: i32) {
+    app.exit(code);
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(ShellState::default())
         .setup(|app| {
             let new_tab = MenuItem::with_id(app, "new_tab", "New Terminal Tab", true, Some("CmdOrCtrl+T"))?;
+            let close_tab = MenuItem::with_id(app, "close_tab", "Close Tab", true, Some("CmdOrCtrl+W"))?;
+            let split_v = MenuItem::with_id(app, "split_v", "Split Vertically", true, Some("CmdOrCtrl+D"))?;
+            let split_h = MenuItem::with_id(app, "split_h", "Split Horizontally", true, Some("CmdOrCtrl+Shift+D"))?;
+            let cmd_palette = MenuItem::with_id(app, "command_palette", "Command Palette", true, Some("CmdOrCtrl+K"))?;
+            let settings = MenuItem::with_id(app, "settings", "Settings...", true, Some("CmdOrCtrl+,"))?;
+            let fleet_dash = MenuItem::with_id(app, "fleet_dashboard", "Fleet & Workflows", true, Some("CmdOrCtrl+Shift+F"))?;
             let open_mc = MenuItem::with_id(app, "open_mc", "Open Mission Control", true, Some("CmdOrCtrl+M"))?;
             let about = MenuItem::with_id(app, "about_wazir", "About Wazir Shell & Licensing", true, None::<&str>)?;
 
@@ -526,8 +1018,12 @@ fn main() {
                 true,
                 &[
                     &new_tab,
-                    &open_mc,
+                    &close_tab,
                     &PredefinedMenuItem::separator(app)?,
+                    &split_v,
+                    &split_h,
+                    &PredefinedMenuItem::separator(app)?,
+                    &settings,
                     &about,
                     &PredefinedMenuItem::quit(app, None)?,
                 ],
@@ -542,13 +1038,23 @@ fn main() {
                     &PredefinedMenuItem::select_all(app, None)?,
                 ],
             )?;
-            let menu = Menu::with_items(app, &[&shell_menu, &edit_menu])?;
+            let view_menu = Submenu::with_items(
+                app,
+                "View",
+                true,
+                &[
+                    &cmd_palette,
+                    &fleet_dash,
+                    &open_mc,
+                ],
+            )?;
+            let menu = Menu::with_items(app, &[&shell_menu, &edit_menu, &view_menu])?;
             app.set_menu(menu)?;
 
             app.on_menu_event(|app, event| {
                 match event.id().as_ref() {
-                    "new_tab" => {
-                        let _ = app.emit("wazir-menu", "new_tab");
+                    "new_tab" | "close_tab" | "split_v" | "split_h" | "command_palette" | "settings" | "fleet_dashboard" => {
+                        let _ = app.emit("wazir-menu", event.id().as_ref());
                     }
                     "open_mc" => {
                         let _ = app.opener().open_url("http://127.0.0.1:4801/mission-control.html", None::<&str>);
@@ -562,6 +1068,7 @@ fn main() {
 
             if let Some(win) = app.get_webview_window("main") {
                 let _ = win.show();
+                let _ = win.set_focus();
             }
             Ok(())
         })
@@ -570,17 +1077,26 @@ fn main() {
             pty_write,
             pty_resize,
             pty_close,
+            pty_get_info,
             run_wazir_ai_task,
             run_wazir_workflow,
             list_wazir_jobs,
             control_wazir_job,
             inspect_wazir_job,
             get_about_info,
+            get_shell_bootstrap,
+            set_consent_state,
+            save_shell_settings,
+            get_wazir_models_fast,
+            get_wazir_fleet_fast,
+            get_wazir_audit_logs,
             open_mission_control,
             get_wazir_theme,
             set_wazir_theme,
             list_wazir_custom_commands,
-            save_wazir_custom_command
+            save_wazir_custom_command,
+            save_verification_artifact,
+            exit_application
         ])
         .run(tauri::generate_context!())
         .expect("error running Wazir Shell");
@@ -591,20 +1107,47 @@ mod tests {
     use super::*;
 
     #[test]
-    fn resolves_default_shell_and_node_binary() {
-        assert!(!default_shell().is_empty());
+    fn discovers_user_shell_and_node_binary() {
+        let shell = discover_user_shell();
+        assert!(!shell.is_empty());
         assert!(!resolve_node_binary().is_empty());
     }
 
     #[test]
-    fn returns_about_info_with_package_version() {
+    fn returns_about_info_with_agpl_license() {
         let info = get_about_info();
         assert_eq!(info.name, "Wazir Shell");
         assert_eq!(info.version, env!("CARGO_PKG_VERSION"));
+        assert!(info.license.contains("AGPL-3.0-only"));
+        assert!(!info.license.to_lowercase().contains("noncommercial"));
     }
 
     #[test]
-    fn persists_wazir_theme_and_custom_commands_in_isolated_home() {
+    fn persists_consent_and_purges_diagnostics_on_decline() {
+        let temp_home = std::env::temp_dir().join(format!("wazir-shell-consent-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp_home);
+        std::fs::create_dir_all(&temp_home).unwrap();
+        std::env::set_var("WAZIR_HOME", &temp_home);
+
+        let queue_path = temp_home.join("diagnostics-queue.jsonl");
+        std::fs::write(&queue_path, "{\"event\":\"test\"}\n").unwrap();
+        assert!(queue_path.exists());
+
+        let declined = set_consent_state(false, true, false, false, true).expect("decline");
+        assert_eq!(declined["accepted"], false);
+        assert_eq!(declined["declined"], true);
+        assert!(!queue_path.exists());
+
+        let accepted = set_consent_state(true, false, true, false, true).expect("accept");
+        assert_eq!(accepted["accepted"], true);
+        assert_eq!(accepted["richAnalytics"], true);
+
+        let _ = std::fs::remove_dir_all(&temp_home);
+        std::env::remove_var("WAZIR_HOME");
+    }
+
+    #[test]
+    fn persists_settings_theme_and_custom_commands_in_isolated_home() {
         let temp_home = std::env::temp_dir().join(format!("wazir-shell-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&temp_home);
         std::env::set_var("WAZIR_HOME", &temp_home);
@@ -614,6 +1157,15 @@ mod tests {
         let get_res = get_wazir_theme().expect("get theme");
         assert_eq!(get_res["themeId"], "catppuccin");
         assert!(set_wazir_theme("nonexistent-theme".to_string()).is_err());
+
+        let saved_settings = save_shell_settings(serde_json::json!({
+            "themeId": "nord",
+            "fontSize": 14,
+            "defaultMode": "auto"
+        }))
+        .expect("save settings");
+        assert_eq!(saved_settings["fontSize"], 14);
+        assert_eq!(get_wazir_theme().unwrap()["themeId"], "nord");
 
         let saved = save_wazir_custom_command(
             "hello".to_string(),
@@ -626,6 +1178,10 @@ mod tests {
         let listed = list_wazir_custom_commands().expect("list custom commands");
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0]["name"], "hello");
+
+        let bootstrap = get_shell_bootstrap().expect("bootstrap");
+        assert!(bootstrap["discovered_shell"].as_str().unwrap().len() > 0);
+        assert_eq!(bootstrap["custom_commands"].as_array().unwrap().len(), 1);
 
         let _ = std::fs::remove_dir_all(&temp_home);
         std::env::remove_var("WAZIR_HOME");
