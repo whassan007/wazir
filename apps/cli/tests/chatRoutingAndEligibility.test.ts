@@ -466,12 +466,26 @@ describe('WAZIR — Model Routing, Resource Eligibility, and Chat Execution Regr
     expect(decision.modelId).toBe('qwen/qwen2.5-coder-1.5b');
     expect(decision.modelId).not.toBe('qwen/qwen3.8-27b');
 
-    // Verify qwen/qwen3.8-27b was rejected in Phase 1 with placement memory reason
+    // Since d5ced75 the per-candidate placement (memory) check runs only for pinned
+    // targets; unpinned plans enforce memory in the placement preflight loop instead, so
+    // the 22GB model is ranked but never placed. Prove the memory gate on this same 4GB
+    // fleet by pinning the large model: it must be rejected with the memory reason.
     const largeEval = decision.modelDecision.empiricalExplanation?.evaluatedCandidates.find(
       (c) => c.modelId === 'qwen/qwen3.8-27b',
     );
-    expect(largeEval?.eligible).toBe(false);
-    expect(largeEval?.reasons.join(' ')).toContain('available memory 4GB < required 22GB');
+    expect(largeEval).toBeDefined();
+    expect(() =>
+      engine.scheduler.plan({
+        task: {
+          id: 'task-ls-pinned-large',
+          type: 'coding',
+          title: 'ls',
+          input: 'ls',
+          requirements: { capabilities: ['code_generation'], toolCalling: true },
+          execution: { targetModelId: 'qwen/qwen3.8-27b' },
+        },
+      }),
+    ).toThrowError(/available memory 4GB < required 22GB/);
   });
 
   it('3 & 4 & 8: Plain ls in wa chat with 0.1GB free memory and only 22GB model fails gracefully with actionable recovery and !ls tip, and chat remains usable afterwards', async () => {

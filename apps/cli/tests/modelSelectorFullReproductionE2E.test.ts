@@ -927,7 +927,8 @@ describe('Model Selector Full Reproduction E2E (20 Required Steps)', () => {
     const step1Visible = outStream.buffer.getVisibleTextCombined();
     expect(step1Visible).toContain('WAZIR');
     expect(step1Visible).toContain('Ready');
-    expect(step1Visible).toContain('>');
+    // Prompt glyph is '›' in the unicode theme and '>' in ASCII mode (apps/cli/src/tui/theme.ts).
+    expect(step1Visible).toMatch(/[›>]/);
     stepCaptures[1] = {
       step: 'Step 1: Launch wa chat in conversation mode',
       visibleText: step1Visible,

@@ -4,7 +4,10 @@ import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { spawn as spawnPty } from 'node-pty';
+// Load node-pty through the product loader: on macOS it restores the execute bit on the
+// prebuilt spawn-helper, which a fresh `npm ci` leaves at 0644 (posix_spawnp failed).
+import { loadNodePty } from '@wazir/tools';
+const spawnPty: typeof import('node-pty').spawn = (...args) => loadNodePty().spawn(...args);
 import {
   classifyWithFastOrchestrator,
   computeLatencyPercentiles,

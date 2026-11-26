@@ -1125,7 +1125,7 @@ export function renderFleetOverviewPane(tui: any, cols: number, maxRows: number)
       ? {
           model: gpuModel,
           count: gpuCount,
-          memoryGB: comp.id === 'DGX-01' ? 640 : comp.id === 'MAC-01' ? 128 : 24,
+          memoryGB: registeredGpuMemoryGB ?? (comp.id === 'DGX-01' ? 640 : comp.id === 'MAC-01' ? 128 : 24),
         }
       : undefined;
 
