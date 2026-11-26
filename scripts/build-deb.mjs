@@ -246,7 +246,7 @@ writeFileSync(path.join(stagingDir, 'usr/lib/wazir/package.json'), JSON.stringif
 // 4. Systemd services (never auto-enabled by maintainer scripts; self-improvement
 // has no unit at all and is only started explicitly by the user).
 const systemdWorker = readFileSync(path.resolve(rootDir, 'scripts/systemd/wazir-worker.service'), 'utf8')
-  .replace('/usr/bin/node /opt/wazir/apps/worker/dist/index.js', '/usr/bin/wa worker start')
+  .replace('/usr/bin/node /opt/wazir/apps/worker/dist/index.js', '/usr/bin/wa improve start --foreground --continuous')
   .replace('WorkingDirectory=/opt/wazir', 'WorkingDirectory=/var/lib/wazir')
   .replace('ReadWritePaths=/opt/wazir', 'ReadWritePaths=/var/lib/wazir');
 

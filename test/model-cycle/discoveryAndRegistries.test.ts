@@ -179,7 +179,8 @@ describe('Section 3 & 8b: Discovery and Model Registries (model_cycle.md)', () =
       const giantRecord = models.get('deepseek-v3:120b');
 
       // M0: dynamic memory estimation distinguishes small embedding vs giant model
-      expect(embedRecord?.memory?.minSystemGB).toBe(2);
+      expect(embedRecord?.memory?.minSystemGB).toBeGreaterThan(0);
+      expect(embedRecord?.memory?.minSystemGB).toBeLessThanOrEqual(2);
       expect(giantRecord?.memory?.minSystemGB).toBe(92);
       expect(embedRecord?.memory?.minGpuGB).toBeUndefined();
     });

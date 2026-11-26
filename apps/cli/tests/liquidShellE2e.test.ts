@@ -14,8 +14,9 @@ import {
 } from '../src/commands/shellCommand.js';
 
 const REPO_ROOT = path.resolve(__dirname, '../../..');
+const HAS_EMBEDDED_GGUF = fs.existsSync(path.join(REPO_ROOT, 'assets/models/wazir-shell-mini/LFM2.5-350M-Q4_K_M.gguf'));
 
-describe('Wazir Shell Built-In Liquid AI E2E Verification (Offline Zero-Config)', () => {
+describe.skipIf(!HAS_EMBEDDED_GGUF)('Wazir Shell Built-In Liquid AI E2E Verification (Offline Zero-Config)', () => {
   let tmpHome: string;
 
   beforeEach(() => {

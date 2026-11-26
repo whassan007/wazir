@@ -437,7 +437,7 @@ export class FleetTui {
     }
     this.conversation = new ConversationController({
       sessionId: options.sessionId ?? this.sessionId,
-      projectRoot: this.engine.projectRoot || process.cwd(),
+      projectRoot: typeof this.engine.projectRoot === 'string' && this.engine.projectRoot ? this.engine.projectRoot : process.cwd(),
       permissionMode: options.permissionMode,
       routingMode: options.routingMode,
       selectedModelId: options.modelId,

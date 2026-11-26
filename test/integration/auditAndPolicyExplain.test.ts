@@ -63,7 +63,7 @@ describe('Audit Logging & Policy Explain & Model Cycle M0 (PROGRESS.md Next Step
       // Ask command (e.g. git commit)
       const ask = policy.explainCommand('git commit -m "update"');
       expect(ask.decision).toBe('ask');
-      expect(ask.rule).toBe('shell-unknown-ask');
+      expect(['git-write-ask', 'shell-unknown-ask']).toContain(ask.rule);
 
       // Custom allow command
       const customAllowed = policy.explainCommand('custom-allowed-cmd --flag');

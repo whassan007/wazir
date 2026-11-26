@@ -3,7 +3,7 @@
   "benchmarkId": "wazir-qwen-transplant-simple-50",
   "mode": "deterministic-simulated-runtime",
   "epistemicNote": "Deterministic simulated-runtime benchmark: LLM token/tool-call generation is deterministically scripted per agent protocol (native structured toolCalls for WazirQwenAgent vs raw JSON-in-text with realistic small/local-model formatting, plan-phase, and escaping friction for LegacyJsonCodingAgent), while 100% of agent orchestration, CoreToolScheduler batching, 3-stage smart edit, multi_edit, read_many_files, ProportionalVerifier, Node.js shell checks, and on-disk grading execute live.",
-  "generatedAt": "2026-11-15T04:17:59.742Z",
+  "generatedAt": "2026-11-26T08:01:21.210Z",
   "hardware": {
     "cpuModel": "Apple M5 Pro",
     "cpuCores": 18,
@@ -12,7 +12,7 @@
     "nodeVersion": "v22.23.3"
   },
   "totalTasks": 50,
-  "totalSuiteWallClockMs": 3906.98,
+  "totalSuiteWallClockMs": 4310.26,
   "comparison": {
     "wazirQwenAgent": {
       "passedTasks": 50,
@@ -27,8 +27,8 @@
       "verificationCommandsOnEditTasks": 168,
       "shellSpawnsOnQaTasks": 0,
       "shellSpawnsOnEditTasks": 6,
-      "totalWallClockMs": 1149.5,
-      "medianTaskWallClockMs": 7.06,
+      "totalWallClockMs": 1285.75,
+      "medianTaskWallClockMs": 7.07,
       "byCategory": {
         "read_only_qa": {
           "category": "read_only_qa",
@@ -40,7 +40,7 @@
           "medianToolCalls": 1,
           "verificationCommandsExecuted": 0,
           "shellSpawns": 0,
-          "totalWallClockMs": 11.6
+          "totalWallClockMs": 13.1
         },
         "one_line_bugfix": {
           "category": "one_line_bugfix",
@@ -52,7 +52,7 @@
           "medianToolCalls": 2,
           "verificationCommandsExecuted": 32,
           "shellSpawns": 0,
-          "totalWallClockMs": 78.15
+          "totalWallClockMs": 82.73
         },
         "symbol_rename": {
           "category": "symbol_rename",
@@ -64,7 +64,7 @@
           "medianToolCalls": 2,
           "verificationCommandsExecuted": 28,
           "shellSpawns": 0,
-          "totalWallClockMs": 48.29
+          "totalWallClockMs": 52.16
         },
         "new_helper_function": {
           "category": "new_helper_function",
@@ -76,7 +76,7 @@
           "medianToolCalls": 2,
           "verificationCommandsExecuted": 28,
           "shellSpawns": 0,
-          "totalWallClockMs": 47.59
+          "totalWallClockMs": 50.02
         },
         "config_json_edit": {
           "category": "config_json_edit",
@@ -88,7 +88,7 @@
           "medianToolCalls": 2,
           "verificationCommandsExecuted": 28,
           "shellSpawns": 0,
-          "totalWallClockMs": 44.25
+          "totalWallClockMs": 44.31
         },
         "multi_file_read_edit": {
           "category": "multi_file_read_edit",
@@ -100,7 +100,7 @@
           "medianToolCalls": 3,
           "verificationCommandsExecuted": 28,
           "shellSpawns": 0,
-          "totalWallClockMs": 94.43
+          "totalWallClockMs": 100.28
         },
         "targeted_shell_check": {
           "category": "targeted_shell_check",
@@ -112,7 +112,7 @@
           "medianToolCalls": 3,
           "verificationCommandsExecuted": 24,
           "shellSpawns": 6,
-          "totalWallClockMs": 825.19
+          "totalWallClockMs": 943.15
         }
       }
     },
@@ -129,8 +129,8 @@
       "verificationCommandsOnEditTasks": 136,
       "shellSpawnsOnQaTasks": 0,
       "shellSpawnsOnEditTasks": 4,
-      "totalWallClockMs": 686.73,
-      "medianTaskWallClockMs": 6.94,
+      "totalWallClockMs": 796.85,
+      "medianTaskWallClockMs": 6.92,
       "byCategory": {
         "read_only_qa": {
           "category": "read_only_qa",
@@ -142,7 +142,7 @@
           "medianToolCalls": 1,
           "verificationCommandsExecuted": 0,
           "shellSpawns": 0,
-          "totalWallClockMs": 10.41
+          "totalWallClockMs": 10.8
         },
         "one_line_bugfix": {
           "category": "one_line_bugfix",
@@ -154,7 +154,7 @@
           "medianToolCalls": 2,
           "verificationCommandsExecuted": 24,
           "shellSpawns": 0,
-          "totalWallClockMs": 44.1
+          "totalWallClockMs": 48.73
         },
         "symbol_rename": {
           "category": "symbol_rename",
@@ -166,7 +166,7 @@
           "medianToolCalls": 2,
           "verificationCommandsExecuted": 28,
           "shellSpawns": 0,
-          "totalWallClockMs": 61.01
+          "totalWallClockMs": 60.24
         },
         "new_helper_function": {
           "category": "new_helper_function",
@@ -178,7 +178,7 @@
           "medianToolCalls": 2,
           "verificationCommandsExecuted": 24,
           "shellSpawns": 0,
-          "totalWallClockMs": 48.31
+          "totalWallClockMs": 46.4
         },
         "config_json_edit": {
           "category": "config_json_edit",
@@ -190,7 +190,7 @@
           "medianToolCalls": 2,
           "verificationCommandsExecuted": 20,
           "shellSpawns": 0,
-          "totalWallClockMs": 34.33
+          "totalWallClockMs": 33.93
         },
         "multi_file_read_edit": {
           "category": "multi_file_read_edit",
@@ -202,7 +202,7 @@
           "medianToolCalls": 4,
           "verificationCommandsExecuted": 24,
           "shellSpawns": 0,
-          "totalWallClockMs": 75.05
+          "totalWallClockMs": 77.09
         },
         "targeted_shell_check": {
           "category": "targeted_shell_check",
@@ -214,7 +214,7 @@
           "medianToolCalls": 3,
           "verificationCommandsExecuted": 16,
           "shellSpawns": 4,
-          "totalWallClockMs": 413.52
+          "totalWallClockMs": 519.66
         }
       }
     },
@@ -243,7 +243,7 @@
         "verificationCommandsExecuted": 0,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 5.08
+        "wallClockMs": 6.02
       },
       "legacyJsonCodingAgent": {
         "taskId": "ST-001",
@@ -258,7 +258,7 @@
         "verificationCommandsExecuted": 0,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 3.46
+        "wallClockMs": 3.87
       }
     },
     {
@@ -278,7 +278,7 @@
         "verificationCommandsExecuted": 0,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 0.76
+        "wallClockMs": 0.87
       },
       "legacyJsonCodingAgent": {
         "taskId": "ST-002",
@@ -293,7 +293,7 @@
         "verificationCommandsExecuted": 0,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 0.92
+        "wallClockMs": 0.87
       }
     },
     {
@@ -313,7 +313,7 @@
         "verificationCommandsExecuted": 0,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 1.02
+        "wallClockMs": 1.09
       },
       "legacyJsonCodingAgent": {
         "taskId": "ST-003",
@@ -328,7 +328,7 @@
         "verificationCommandsExecuted": 0,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 1.1
+        "wallClockMs": 1.22
       }
     },
     {
@@ -348,7 +348,7 @@
         "verificationCommandsExecuted": 0,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 0.87
+        "wallClockMs": 0.98
       },
       "legacyJsonCodingAgent": {
         "taskId": "ST-004",
@@ -363,7 +363,7 @@
         "verificationCommandsExecuted": 0,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 0.79
+        "wallClockMs": 0.82
       }
     },
     {
@@ -383,7 +383,7 @@
         "verificationCommandsExecuted": 0,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 1.61
+        "wallClockMs": 1.79
       },
       "legacyJsonCodingAgent": {
         "taskId": "ST-005",
@@ -398,7 +398,7 @@
         "verificationCommandsExecuted": 0,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 1
+        "wallClockMs": 1.13
       }
     },
     {
@@ -418,7 +418,7 @@
         "verificationCommandsExecuted": 0,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 0.8
+        "wallClockMs": 0.9
       },
       "legacyJsonCodingAgent": {
         "taskId": "ST-006",
@@ -433,7 +433,7 @@
         "verificationCommandsExecuted": 0,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 0.82
+        "wallClockMs": 0.75
       }
     },
     {
@@ -453,7 +453,7 @@
         "verificationCommandsExecuted": 0,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 0.83
+        "wallClockMs": 0.76
       },
       "legacyJsonCodingAgent": {
         "taskId": "ST-007",
@@ -468,7 +468,7 @@
         "verificationCommandsExecuted": 0,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 1.45
+        "wallClockMs": 1.4
       }
     },
     {
@@ -488,7 +488,7 @@
         "verificationCommandsExecuted": 0,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 0.63
+        "wallClockMs": 0.69
       },
       "legacyJsonCodingAgent": {
         "taskId": "ST-008",
@@ -503,7 +503,7 @@
         "verificationCommandsExecuted": 0,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 0.87
+        "wallClockMs": 0.74
       }
     },
     {
@@ -523,7 +523,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 24.32
+        "wallClockMs": 30.2
       },
       "legacyJsonCodingAgent": {
         "taskId": "ST-009",
@@ -538,7 +538,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 7.3
+        "wallClockMs": 8.11
       }
     },
     {
@@ -558,7 +558,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 8.58
+        "wallClockMs": 6.85
       },
       "legacyJsonCodingAgent": {
         "taskId": "ST-010",
@@ -573,7 +573,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 6.42
+        "wallClockMs": 6.91
       }
     },
     {
@@ -593,7 +593,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 7.77
+        "wallClockMs": 7.03
       },
       "legacyJsonCodingAgent": {
         "taskId": "ST-011",
@@ -608,7 +608,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 6.73
+        "wallClockMs": 6.29
       }
     },
     {
@@ -628,7 +628,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 7.01
+        "wallClockMs": 9.15
       },
       "legacyJsonCodingAgent": {
         "taskId": "ST-012",
@@ -643,7 +643,7 @@
         "verificationCommandsExecuted": 0,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 0.47
+        "wallClockMs": 0.43
       }
     },
     {
@@ -663,7 +663,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 8.32
+        "wallClockMs": 6.74
       },
       "legacyJsonCodingAgent": {
         "taskId": "ST-013",
@@ -678,7 +678,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 9.07
+        "wallClockMs": 9.2
       }
     },
     {
@@ -698,7 +698,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 7.36
+        "wallClockMs": 7.21
       },
       "legacyJsonCodingAgent": {
         "taskId": "ST-014",
@@ -713,7 +713,7 @@
         "verificationCommandsExecuted": 0,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 0.27
+        "wallClockMs": 0.28
       }
     },
     {
@@ -733,7 +733,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 6.42
+        "wallClockMs": 7.49
       },
       "legacyJsonCodingAgent": {
         "taskId": "ST-015",
@@ -748,7 +748,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 6.88
+        "wallClockMs": 8.07
       }
     },
     {
@@ -768,7 +768,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 8.37
+        "wallClockMs": 8.06
       },
       "legacyJsonCodingAgent": {
         "taskId": "ST-016",
@@ -783,7 +783,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 6.96
+        "wallClockMs": 9.44
       }
     },
     {
@@ -803,7 +803,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 7.38
+        "wallClockMs": 9.35
       },
       "legacyJsonCodingAgent": {
         "taskId": "ST-017",
@@ -818,7 +818,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 6.87
+        "wallClockMs": 6.58
       }
     },
     {
@@ -838,7 +838,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 7.09
+        "wallClockMs": 6.74
       },
       "legacyJsonCodingAgent": {
         "taskId": "ST-018",
@@ -853,7 +853,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 7.18
+        "wallClockMs": 7.41
       }
     },
     {
@@ -873,7 +873,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 7.2
+        "wallClockMs": 6.47
       },
       "legacyJsonCodingAgent": {
         "taskId": "ST-019",
@@ -888,7 +888,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 7.52
+        "wallClockMs": 7.64
       }
     },
     {
@@ -923,7 +923,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 12.1
+        "wallClockMs": 11.82
       }
     },
     {
@@ -943,7 +943,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 7.24
+        "wallClockMs": 7.07
       },
       "legacyJsonCodingAgent": {
         "taskId": "ST-021",
@@ -958,7 +958,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 7.21
+        "wallClockMs": 6.76
       }
     },
     {
@@ -978,7 +978,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 6.48
+        "wallClockMs": 7.92
       },
       "legacyJsonCodingAgent": {
         "taskId": "ST-022",
@@ -993,7 +993,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 12.51
+        "wallClockMs": 13.11
       }
     },
     {
@@ -1013,7 +1013,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 6.15
+        "wallClockMs": 7.86
       },
       "legacyJsonCodingAgent": {
         "taskId": "ST-023",
@@ -1028,7 +1028,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 7.62
+        "wallClockMs": 6.92
       }
     },
     {
@@ -1048,7 +1048,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 6.49
+        "wallClockMs": 7.06
       },
       "legacyJsonCodingAgent": {
         "taskId": "ST-024",
@@ -1063,7 +1063,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 12.46
+        "wallClockMs": 11.73
       }
     },
     {
@@ -1083,7 +1083,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 6.4
+        "wallClockMs": 7.47
       },
       "legacyJsonCodingAgent": {
         "taskId": "ST-025",
@@ -1098,7 +1098,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 6.46
+        "wallClockMs": 7.32
       }
     },
     {
@@ -1118,7 +1118,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 7.03
+        "wallClockMs": 7.81
       },
       "legacyJsonCodingAgent": {
         "taskId": "ST-026",
@@ -1133,7 +1133,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 7.12
+        "wallClockMs": 7.01
       }
     },
     {
@@ -1153,7 +1153,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 6.47
+        "wallClockMs": 6.95
       },
       "legacyJsonCodingAgent": {
         "taskId": "ST-027",
@@ -1168,7 +1168,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 6.92
+        "wallClockMs": 6.76
       }
     },
     {
@@ -1188,7 +1188,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 7.02
+        "wallClockMs": 6.66
       },
       "legacyJsonCodingAgent": {
         "taskId": "ST-028",
@@ -1203,7 +1203,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 7.93
+        "wallClockMs": 6.96
       }
     },
     {
@@ -1223,7 +1223,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 7.43
+        "wallClockMs": 7
       },
       "legacyJsonCodingAgent": {
         "taskId": "ST-029",
@@ -1238,7 +1238,7 @@
         "verificationCommandsExecuted": 0,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 0.27
+        "wallClockMs": 0.33
       }
     },
     {
@@ -1258,7 +1258,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 6.75
+        "wallClockMs": 7.07
       },
       "legacyJsonCodingAgent": {
         "taskId": "ST-030",
@@ -1273,7 +1273,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 7.15
+        "wallClockMs": 6.29
       }
     },
     {
@@ -1293,7 +1293,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 5.3
+        "wallClockMs": 5.19
       },
       "legacyJsonCodingAgent": {
         "taskId": "ST-031",
@@ -1308,7 +1308,7 @@
         "verificationCommandsExecuted": 0,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 1.19
+        "wallClockMs": 1.17
       }
     },
     {
@@ -1328,7 +1328,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 5.5
+        "wallClockMs": 5.7
       },
       "legacyJsonCodingAgent": {
         "taskId": "ST-032",
@@ -1343,7 +1343,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 8.19
+        "wallClockMs": 5.3
       }
     },
     {
@@ -1363,7 +1363,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 5.15
+        "wallClockMs": 4.7
       },
       "legacyJsonCodingAgent": {
         "taskId": "ST-033",
@@ -1378,7 +1378,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 5.04
+        "wallClockMs": 5.64
       }
     },
     {
@@ -1398,7 +1398,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 5.33
+        "wallClockMs": 5.57
       },
       "legacyJsonCodingAgent": {
         "taskId": "ST-034",
@@ -1413,7 +1413,7 @@
         "verificationCommandsExecuted": 0,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 0.96
+        "wallClockMs": 1
       }
     },
     {
@@ -1433,7 +1433,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 11.74
+        "wallClockMs": 12.03
       },
       "legacyJsonCodingAgent": {
         "taskId": "ST-035",
@@ -1448,7 +1448,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 7.79
+        "wallClockMs": 8.58
       }
     },
     {
@@ -1468,7 +1468,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 5.93
+        "wallClockMs": 5.82
       },
       "legacyJsonCodingAgent": {
         "taskId": "ST-036",
@@ -1483,7 +1483,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 5.64
+        "wallClockMs": 6.07
       }
     },
     {
@@ -1518,7 +1518,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 5.52
+        "wallClockMs": 6.17
       }
     },
     {
@@ -1538,7 +1538,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 13.83
+        "wallClockMs": 13.5
       },
       "legacyJsonCodingAgent": {
         "taskId": "ST-038",
@@ -1553,7 +1553,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 13.05
+        "wallClockMs": 11.89
       }
     },
     {
@@ -1573,7 +1573,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 16.13
+        "wallClockMs": 16.84
       },
       "legacyJsonCodingAgent": {
         "taskId": "ST-039",
@@ -1588,7 +1588,7 @@
         "verificationCommandsExecuted": 0,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 1.55
+        "wallClockMs": 1.98
       }
     },
     {
@@ -1608,7 +1608,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 11.28
+        "wallClockMs": 12.77
       },
       "legacyJsonCodingAgent": {
         "taskId": "ST-040",
@@ -1623,7 +1623,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 11.81
+        "wallClockMs": 12.9
       }
     },
     {
@@ -1643,7 +1643,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 14
+        "wallClockMs": 15.19
       },
       "legacyJsonCodingAgent": {
         "taskId": "ST-041",
@@ -1658,7 +1658,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 6.38
+        "wallClockMs": 7.96
       }
     },
     {
@@ -1678,7 +1678,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 16.48
+        "wallClockMs": 17.91
       },
       "legacyJsonCodingAgent": {
         "taskId": "ST-042",
@@ -1693,7 +1693,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 17.12
+        "wallClockMs": 18.69
       }
     },
     {
@@ -1713,7 +1713,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 11.63
+        "wallClockMs": 12.22
       },
       "legacyJsonCodingAgent": {
         "taskId": "ST-043",
@@ -1728,7 +1728,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 12.03
+        "wallClockMs": 11.1
       }
     },
     {
@@ -1748,7 +1748,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 11.08
+        "wallClockMs": 11.85
       },
       "legacyJsonCodingAgent": {
         "taskId": "ST-044",
@@ -1763,7 +1763,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 13.11
+        "wallClockMs": 12.57
       }
     },
     {
@@ -1783,7 +1783,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 1,
         "shellCommandsSucceeded": 1,
-        "wallClockMs": 145.85
+        "wallClockMs": 182.25
       },
       "legacyJsonCodingAgent": {
         "taskId": "ST-045",
@@ -1798,7 +1798,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 1,
         "shellCommandsSucceeded": 1,
-        "wallClockMs": 91.59
+        "wallClockMs": 117.2
       }
     },
     {
@@ -1818,7 +1818,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 1,
         "shellCommandsSucceeded": 1,
-        "wallClockMs": 134.54
+        "wallClockMs": 163.24
       },
       "legacyJsonCodingAgent": {
         "taskId": "ST-046",
@@ -1833,7 +1833,7 @@
         "verificationCommandsExecuted": 0,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 44.58
+        "wallClockMs": 56.97
       }
     },
     {
@@ -1853,7 +1853,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 1,
         "shellCommandsSucceeded": 1,
-        "wallClockMs": 135.45
+        "wallClockMs": 157.15
       },
       "legacyJsonCodingAgent": {
         "taskId": "ST-047",
@@ -1868,7 +1868,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 1,
         "shellCommandsSucceeded": 1,
-        "wallClockMs": 92.14
+        "wallClockMs": 130.17
       }
     },
     {
@@ -1888,7 +1888,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 1,
         "shellCommandsSucceeded": 1,
-        "wallClockMs": 136.21
+        "wallClockMs": 160.83
       },
       "legacyJsonCodingAgent": {
         "taskId": "ST-048",
@@ -1903,7 +1903,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 1,
         "shellCommandsSucceeded": 1,
-        "wallClockMs": 89.96
+        "wallClockMs": 105.47
       }
     },
     {
@@ -1923,7 +1923,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 1,
         "shellCommandsSucceeded": 1,
-        "wallClockMs": 137.42
+        "wallClockMs": 141.94
       },
       "legacyJsonCodingAgent": {
         "taskId": "ST-049",
@@ -1938,7 +1938,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 1,
         "shellCommandsSucceeded": 1,
-        "wallClockMs": 94.93
+        "wallClockMs": 109.51
       }
     },
     {
@@ -1958,7 +1958,7 @@
         "verificationCommandsExecuted": 4,
         "shellSpawns": 1,
         "shellCommandsSucceeded": 1,
-        "wallClockMs": 135.72
+        "wallClockMs": 137.74
       },
       "legacyJsonCodingAgent": {
         "taskId": "ST-050",
@@ -1973,7 +1973,7 @@
         "verificationCommandsExecuted": 0,
         "shellSpawns": 0,
         "shellCommandsSucceeded": 0,
-        "wallClockMs": 0.32
+        "wallClockMs": 0.34
       }
     }
   ]

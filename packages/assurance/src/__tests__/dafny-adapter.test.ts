@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -45,7 +46,8 @@ describe('Dafny binary resolution', () => {
   });
 });
 
-describe('DafnyAdapter with real pinned Dafny', () => {
+const hasPinnedDafny = existsSync(resolveDafnyBinary());
+describe.skipIf(!hasPinnedDafny)('DafnyAdapter with real pinned Dafny', () => {
   it('proves stop_command with no trusted base', async () => {
     const result = await adapter.verify(obligation(resolve('skills/formal/dafny/examples/stop_command.dfy')), 'test-revision');
     expect(result.verdict, JSON.stringify(result)).toBe(Verdict.PROVED);

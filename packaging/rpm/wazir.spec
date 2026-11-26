@@ -74,6 +74,9 @@ fi
 %attr(0750, wazir, wazir) %dir %{_localstatedir}/log/wazir
 
 %changelog
+* Thu Nov 26 2026 Wael Hassan <wael@wazir.dev> - 0.4.3-1
+- Per-arch Linux arm64 .deb with native wazir-shell-bin, GNOME/Nautilus C1-C3 hardening, Omarchy theme/palette/commands, and multi-node coordination fabric qualification
+
 * Sun Nov 15 2026 Wael Hassan <wael@wazir.dev> - 0.3.2-1
 - P0 reliability recovery: Gemma 4 / DGX Spark model admission, context preflight, read-only loop detection, non-Node workspace support, and job lifecycle hardening
 

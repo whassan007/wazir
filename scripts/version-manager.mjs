@@ -324,6 +324,25 @@ export function syncAllVersions(targetVersion, repo = repoRoot) {
     }
   }
 
+  // 10. package-lock.json root version
+  const lockPath = path.join(repo, 'package-lock.json');
+  if (existsSync(lockPath)) {
+    const lockJson = JSON.parse(readFileSync(lockPath, 'utf8'));
+    let lockChanged = false;
+    if (lockJson.version !== targetVersion) {
+      lockJson.version = targetVersion;
+      lockChanged = true;
+    }
+    if (lockJson.packages?.[''] && lockJson.packages[''].version !== targetVersion) {
+      lockJson.packages[''].version = targetVersion;
+      lockChanged = true;
+    }
+    if (lockChanged) {
+      writeFileSync(lockPath, JSON.stringify(lockJson, null, 2) + '\n', 'utf8');
+      recordUpdate('package-lock.json');
+    }
+  }
+
   return updatedFiles;
 }
 

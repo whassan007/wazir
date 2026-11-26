@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { existsSync } from 'node:fs';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -37,7 +38,8 @@ describe('Z3 Python path resolution', () => {
   });
 });
 
-describe('Z3Adapter using real pinned Z3', () => {
+const hasPinnedZ3 = existsSync(resolveZ3Python());
+describe.skipIf(!hasPinnedZ3)('Z3Adapter using real pinned Z3', () => {
   it('reports real tool version', async () => {
     expect(await adapter.checkAvailability()).toMatchObject({ available: true, version: '5.3.1', path: resolveZ3Python() });
   });

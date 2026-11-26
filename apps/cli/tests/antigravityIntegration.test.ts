@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -115,7 +115,8 @@ describe('Antigravity CLI 1.5+ & Wazir MCP host integration', () => {
       const textBlock = (statusRes.content as Array<{ type: string; text?: string }>)[0];
       expect(textBlock?.type).toBe('text');
       const parsed = JSON.parse(textBlock?.text ?? '{}');
-      expect(parsed.summary.version).toBe('0.3.2');
+      const pkgVersion = JSON.parse(readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../package.json'), 'utf8')).version;
+      expect(parsed.summary.version).toBe(pkgVersion);
       expect(Array.isArray(parsed.computers)).toBe(true);
     } finally {
       await client.close().catch(() => undefined);
