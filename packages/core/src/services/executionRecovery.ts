@@ -412,7 +412,6 @@ export class OperationReconciliationGuard {
   private readonly byOperationKey = new Map<string, ConfirmedOperationReceipt>();
   private readonly byCallId = new Map<string, ConfirmedOperationReceipt>();
   private readonly bySemanticKey = new Map<string, ConfirmedOperationReceipt>();
-  private readonly byRevisionIndependentKey = new Map<string, ConfirmedOperationReceipt>();
 
   constructor(initialReceipts: ConfirmedOperationReceipt[] = []) {
     for (const receipt of initialReceipts) {
@@ -435,22 +434,38 @@ export class OperationReconciliationGuard {
         const matchingCall = record.toolCalls.find(
           (tc) => (tc.callId ?? tc.id) === cp.callId && tc.ok,
         );
-        const reconciliation = record.events.find((event) => {
+        const reconciliationIndex = record.events.findIndex((event) => {
           const data = event.data as { reconciled?: { outcome?: string; evidence?: string } } | undefined;
           return event.type === 'tool.completed' && event.callId === cp.callId && data?.reconciled?.outcome === 'APPLIED';
         });
+        const reconciliation = reconciliationIndex === -1 ? undefined : record.events[reconciliationIndex];
         const proof = (reconciliation?.data as { reconciled?: { evidence?: string } } | undefined)?.reconciled?.evidence;
-        guard.recordConfirmedMutation({
+        const receiptBase = {
           executionId: cp.executionId,
           callId: cp.callId,
           toolName: cp.toolName,
           argumentsHash: cp.argumentsHash,
           input: cp.input,
-          workspaceRevision: cp.workspaceRevision,
           output: matchingCall?.output,
           evidence: proof ?? 'Confirmed completed in execution record',
           confirmedAt: (cp.finishedAt ?? new Date()).toISOString(),
-        });
+        };
+        const receipt = guard.recordConfirmedMutation({ ...receiptBase, workspaceRevision: cp.workspaceRevision });
+        // An APPLIED reconciliation advances the workspace revision on behalf of the
+        // reconciled call itself (see reconcileBeforeCrossHarnessResume). That post-reconcile
+        // revision is not a new workspace state relative to this call, so the receipt must
+        // also cover it — otherwise a resumed harness re-issuing the same call at the bumped
+        // revision would re-execute it (D-04). Revisions after that remain distinct operations.
+        if (reconciliation) {
+          const postReconcileRevision = record.events
+            .slice(reconciliationIndex + 1)
+            .find((event) => event.type === 'workspace.revision_changed'
+              && typeof event.workspaceRevision === 'number'
+              && event.workspaceRevision > cp.workspaceRevision)?.workspaceRevision;
+          if (postReconcileRevision !== undefined) {
+            guard.coverPostReconcileRevision(receipt, postReconcileRevision);
+          }
+        }
       }
     }
     return guard;
@@ -460,7 +475,24 @@ export class OperationReconciliationGuard {
     this.byOperationKey.set(receipt.operationKey, receipt);
     this.byCallId.set(`${receipt.executionId}:${receipt.callId}`, receipt);
     this.bySemanticKey.set(receipt.semanticKey, receipt);
-    this.byRevisionIndependentKey.set(`${receipt.executionId}:${receipt.toolName}:${receipt.argumentsHash}`, receipt);
+  }
+
+  /**
+   * Extends an APPLIED receipt's semantic coverage to the workspace revision that its own
+   * reconciliation produced. This is an alias for duplicate detection only: it does not
+   * create a second receipt (listReceipts is unchanged), and revisions beyond the
+   * post-reconcile one are still treated as distinct operations.
+   */
+  coverPostReconcileRevision(receipt: ConfirmedOperationReceipt, workspaceRevision: number): void {
+    if (workspaceRevision === receipt.workspaceRevision) return;
+    const stored = this.byOperationKey.get(receipt.operationKey) ?? receipt;
+    const semanticKey = computeSemanticOperationKey({
+      executionId: receipt.executionId,
+      toolName: receipt.toolName,
+      argumentsHash: receipt.argumentsHash,
+      workspaceRevision,
+    });
+    if (!this.bySemanticKey.has(semanticKey)) this.bySemanticKey.set(semanticKey, stored);
   }
 
   recordConfirmedMutation(params: {
@@ -545,8 +577,7 @@ export class OperationReconciliationGuard {
       };
     }
 
-    const bySemantic = this.bySemanticKey.get(semanticKey) ??
-      this.byRevisionIndependentKey.get(`${params.executionId}:${params.toolName}:${argumentsHash}`);
+    const bySemantic = this.bySemanticKey.get(semanticKey);
     if (bySemantic) {
       return {
         duplicate: true,
@@ -816,7 +847,7 @@ export async function reconcileBeforeCrossHarnessResume(
         evidence: inspection.evidence,
         inspectedBy: 'cross-harness-reconciler',
       });
-      guard.recordConfirmedMutation({
+      const appliedReceipt = guard.recordConfirmedMutation({
         executionId,
         callId: call.callId,
         toolName: call.toolName,
@@ -832,6 +863,8 @@ export async function reconcileBeforeCrossHarnessResume(
             ? String((call.input as Record<string, unknown>).path)
             : `reconciled:${call.toolName}:${call.callId}`;
           await executions.recordFilesChanged(executionId, [targetPath]);
+          // Cover the revision this reconciliation just produced (see fromExecutionRecord).
+          guard.coverPostReconcileRevision(appliedReceipt, executions.getWorkspaceRevision(executionId));
         }
       }
       resolutions.push({
@@ -908,7 +941,7 @@ export async function reconcileBeforeCrossHarnessResume(
         evidence: authEvidence,
         inspectedBy: `operator:${operatorAuth.authorizedBy}`,
       });
-      guard.recordConfirmedMutation({
+      const appliedReceipt = guard.recordConfirmedMutation({
         executionId,
         callId: call.callId,
         toolName: call.toolName,
@@ -924,6 +957,8 @@ export async function reconcileBeforeCrossHarnessResume(
             ? String((call.input as Record<string, unknown>).path)
             : `reconciled:${call.toolName}:${call.callId}`;
           await executions.recordFilesChanged(executionId, [targetPath]);
+          // Cover the revision this reconciliation just produced (see fromExecutionRecord).
+          guard.coverPostReconcileRevision(appliedReceipt, executions.getWorkspaceRevision(executionId));
         }
       }
       resolutions.push({
