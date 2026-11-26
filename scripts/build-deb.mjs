@@ -44,7 +44,14 @@ const dirs = [
   'DEBIAN',
   'usr/bin',
   'usr/lib/wazir',
+  'usr/libexec',
   'lib/systemd/system',
+  'usr/lib/systemd/user',
+  'usr/share/applications',
+  'usr/share/dbus-1/services',
+  'usr/share/gnome-shell/search-providers',
+  'usr/share/nautilus-python/extensions',
+  'usr/share/icons/hicolor/128x128/apps',
   'usr/share/doc/wazir',
 ];
 
@@ -75,6 +82,15 @@ chmodSync(path.join(stagingDir, 'usr/bin/wa'), 0o755);
 writeFileSync(path.join(stagingDir, 'usr/bin/wazir'), launcherScript, 'utf8');
 chmodSync(path.join(stagingDir, 'usr/bin/wazir'), 0o755);
 
+const shellLauncherScript = `#!/bin/sh
+if [ -x /usr/lib/wazir/wazir-shell-bin ] && { [ -n "$DISPLAY" ] || [ -n "$WAYLAND_DISPLAY" ]; }; then
+  exec /usr/lib/wazir/wazir-shell-bin "$@"
+fi
+exec node /usr/lib/wazir/wa.js shell "$@"
+`;
+writeFileSync(path.join(stagingDir, 'usr/bin/wazir-shell'), shellLauncherScript, 'utf8');
+chmodSync(path.join(stagingDir, 'usr/bin/wazir-shell'), 0o755);
+
 // /usr/lib/wazir/wa.js
 writeFileSync(path.join(stagingDir, 'usr/lib/wazir/wa.js'), readFileSync(waBundle, 'utf8'), 'utf8');
 chmodSync(path.join(stagingDir, 'usr/lib/wazir/wa.js'), 0o755);
@@ -90,9 +106,9 @@ const minPkg = {
 };
 writeFileSync(path.join(stagingDir, 'usr/lib/wazir/package.json'), JSON.stringify(minPkg, null, 2), 'utf8');
 
-// 4. Systemd services
+// 4. Systemd services (never auto-enable self-improvement on install)
 const systemdWorker = readFileSync(path.resolve(rootDir, 'scripts/systemd/wazir-worker.service'), 'utf8')
-  .replace('/usr/bin/node /opt/wazir/apps/worker/dist/index.js', '/usr/bin/wa improve start --foreground --continuous')
+  .replace('/usr/bin/node /opt/wazir/apps/worker/dist/index.js', '/usr/bin/wa worker start')
   .replace('WorkingDirectory=/opt/wazir', 'WorkingDirectory=/var/lib/wazir')
   .replace('ReadWritePaths=/opt/wazir', 'ReadWritePaths=/var/lib/wazir');
 
@@ -103,6 +119,56 @@ const systemdApi = readFileSync(path.resolve(rootDir, 'scripts/systemd/wazir-api
 
 writeFileSync(path.join(stagingDir, 'lib/systemd/system/wazir-worker.service'), systemdWorker, 'utf8');
 writeFileSync(path.join(stagingDir, 'lib/systemd/system/wazir-api.service'), systemdApi, 'utf8');
+writeFileSync(path.join(stagingDir, 'usr/lib/systemd/user/wazir-worker.service'), systemdWorker, 'utf8');
+writeFileSync(path.join(stagingDir, 'usr/lib/systemd/user/wazir-api.service'), systemdApi, 'utf8');
+
+// 4b. Desktop entries and icons for GNOME/XDG
+for (const desktopName of ['wazir-shell.desktop', 'wazir-mission-control.desktop', 'wazir.desktop']) {
+  const src = path.resolve(rootDir, 'packaging/linux', desktopName);
+  if (existsSync(src)) {
+    writeFileSync(path.join(stagingDir, 'usr/share/applications', desktopName), readFileSync(src, 'utf8'), 'utf8');
+  }
+}
+const icon128 = path.resolve(rootDir, 'apps/desktop/src-tauri/icons/128x128.png');
+if (existsSync(icon128)) {
+  writeFileSync(path.join(stagingDir, 'usr/share/icons/hicolor/128x128/apps/wazir-shell.png'), readFileSync(icon128));
+  writeFileSync(path.join(stagingDir, 'usr/share/icons/hicolor/128x128/apps/wazir.png'), readFileSync(icon128));
+}
+
+// 4c. GNOME Search Provider, Nautilus Extension & Reversible Profile
+const ubuntuRoot = path.resolve(rootDir, 'os/wazir-os-ubuntu');
+if (existsSync(path.join(ubuntuRoot, 'gnome'))) {
+  writeFileSync(
+    path.join(stagingDir, 'usr/share/gnome-shell/search-providers/org.wazir.SearchProvider.ini'),
+    readFileSync(path.join(ubuntuRoot, 'gnome/org.wazir.SearchProvider.ini'), 'utf8'),
+    'utf8',
+  );
+  writeFileSync(
+    path.join(stagingDir, 'usr/share/dbus-1/services/org.wazir.SearchProvider.service'),
+    readFileSync(path.join(ubuntuRoot, 'gnome/org.wazir.SearchProvider.service'), 'utf8'),
+    'utf8',
+  );
+  writeFileSync(
+    path.join(stagingDir, 'usr/lib/systemd/user/wazir-gnome-search.service'),
+    readFileSync(path.join(ubuntuRoot, 'gnome/wazir-gnome-search.service'), 'utf8'),
+    'utf8',
+  );
+  const searchPy = path.join(stagingDir, 'usr/libexec/wazir-gnome-search.py');
+  writeFileSync(searchPy, readFileSync(path.join(ubuntuRoot, 'gnome/wazir-gnome-search.py'), 'utf8'), 'utf8');
+  chmodSync(searchPy, 0o755);
+}
+if (existsSync(path.join(ubuntuRoot, 'nautilus/wazir_nautilus_extension.py'))) {
+  writeFileSync(
+    path.join(stagingDir, 'usr/share/nautilus-python/extensions/wazir_nautilus_extension.py'),
+    readFileSync(path.join(ubuntuRoot, 'nautilus/wazir_nautilus_extension.py'), 'utf8'),
+    'utf8',
+  );
+}
+if (existsSync(path.join(ubuntuRoot, 'profile/wazir-gnome-profile.sh'))) {
+  const profDst = path.join(stagingDir, 'usr/lib/wazir/wazir-gnome-profile.sh');
+  writeFileSync(profDst, readFileSync(path.join(ubuntuRoot, 'profile/wazir-gnome-profile.sh'), 'utf8'), 'utf8');
+  chmodSync(profDst, 0o755);
+}
 
 // 5. Documentation & License
 writeFileSync(path.join(stagingDir, 'usr/share/doc/wazir/README.md'), readFileSync(path.resolve(rootDir, 'README.md'), 'utf8'), 'utf8');
