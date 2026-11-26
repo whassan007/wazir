@@ -105,8 +105,8 @@ export function getFirstLaunchDisclosureText(): string {
   return [
     `Wazir AI OS — First-Launch Terms & Diagnostic Notice (${DIAGNOSTIC_NOTICE_VERSION})`,
     '',
-    '1. Licensing: Existing Wazir Core/CLI/API components are licensed under AGPL-3.0-only.',
-    '   Commercial authorization is required for commercial use of Wazir-branded noncommercial modules.',
+    '1. Licensing: Wazir is licensed under the GNU Affero General Public License v3.0 (AGPL-3.0-only).',
+    '   Includes selective Apache-2.0 components adapted from QwenLM/qwen-code.',
     '2. Minimum Diagnostic Data: Only after your affirmative acceptance, Wazir may record',
     '   application/build version, OS family & architecture, error code, failure category,',
     '   component ID, sanitized exception category, task phase, worker capability category,',

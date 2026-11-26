@@ -2570,7 +2570,7 @@ export function registerShellAndMetaCommands(program: Command, cliVersion?: stri
         repository: 'https://github.com/whassan007/wazir',
         website: 'https://wazir.wael.bot',
         author: 'Wael Hassan (whassan007)',
-        license: 'AGPL-3.0-only (existing core/CLI/API); source-available noncommercial + commercial authorization for new standalone modules',
+        license: 'AGPL-3.0-only',
         thirdParty: 'Includes selective Apache-2.0 components adapted from QwenLM/qwen-code',
       };
       if (options.json) {
@@ -2591,10 +2591,8 @@ export function registerShellAndMetaCommands(program: Command, cliVersion?: stri
     .action(() => {
       console.log('Wazir AI OS Licensing Summary');
       console.log('----------------------------');
-      console.log('1. Existing Core/CLI/API/Desktop/Mobile: GNU Affero General Public License v3.0 (AGPL-3.0-only).');
+      console.log('1. Wazir Core/CLI/API/Desktop/Shell/Mobile: GNU Affero General Public License v3.0 (AGPL-3.0-only).');
       console.log('2. Selective Qwen Code Transplant: Apache-2.0 (Alibaba Group / QwenLM).');
-      console.log('3. Commercial Authorization: Required for commercial deployment of Wazir-branded noncommercial modules.');
-      console.log('   Request commercial authorization at: https://wazir.wael.bot/licensing');
     });
 
   const diag = program.command('diagnostics').description('Manage Wazir diagnostic consent and local event queue');
