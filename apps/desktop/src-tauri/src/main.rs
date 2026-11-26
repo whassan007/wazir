@@ -319,9 +319,11 @@ fn start_local_runtime_if_needed(token: &str) -> OwnedBackend {
 fn kill_owned(owned: &mut OwnedBackend) {
     if let Some(mut child) = owned.api.take() {
         let _ = child.kill();
+        let _ = child.wait();
     }
     if let Some(mut child) = owned.web.take() {
         let _ = child.kill();
+        let _ = child.wait();
     }
 }
 

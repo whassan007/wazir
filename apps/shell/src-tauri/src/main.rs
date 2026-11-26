@@ -10,9 +10,12 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{Emitter, Manager, State};
 use tauri_plugin_opener::OpenerExt;
 
+const MAX_PTY_SESSIONS: usize = 32;
+
 struct PtySession {
     master: Box<dyn MasterPty + Send>,
     writer: Box<dyn Write + Send>,
+    child: Box<dyn portable_pty::Child + Send + Sync>,
 }
 
 #[derive(Default)]
@@ -143,7 +146,7 @@ fn pty_spawn(
     cmd.env("TERM", "xterm-256color");
     cmd.env("WAZIR_SHELL", "1");
 
-    let _child = pair
+    let child = pair
         .slave
         .spawn_command(cmd)
         .map_err(|e| format!("spawn_command failed: {e}"))?;
@@ -156,6 +159,13 @@ fn pty_spawn(
         .master
         .take_writer()
         .map_err(|e| format!("take_writer failed: {e}"))?;
+
+    {
+        let sessions = state.sessions.lock().map_err(|_| "lock poisoned")?;
+        if sessions.len() >= MAX_PTY_SESSIONS {
+            return Err(format!("maximum PTY session limit ({MAX_PTY_SESSIONS}) reached"));
+        }
+    }
 
     let mut id_guard = state.next_id.lock().map_err(|_| "lock poisoned")?;
     *id_guard += 1;
@@ -171,6 +181,7 @@ fn pty_spawn(
             PtySession {
                 master: pair.master,
                 writer,
+                child,
             },
         );
 
@@ -230,11 +241,15 @@ fn pty_resize(state: State<'_, ShellState>, session_id: String, cols: u16, rows:
 
 #[tauri::command]
 fn pty_close(state: State<'_, ShellState>, session_id: String) -> Result<(), String> {
-    state
+    if let Some(mut session) = state
         .sessions
         .lock()
         .map_err(|_| "lock poisoned")?
-        .remove(&session_id);
+        .remove(&session_id)
+    {
+        let _ = session.child.kill();
+        let _ = session.child.wait();
+    }
     Ok(())
 }
 
@@ -353,6 +368,130 @@ async fn inspect_wazir_job(run_id: String, cwd: Option<String>) -> Result<String
         .map_err(|e| format!("inspect_wazir_job join failed: {e}"))?
 }
 
+const SUPPORTED_THEME_IDS: &[&str] = &[
+    "tokyo-night",
+    "catppuccin",
+    "gruvbox",
+    "rose-pine",
+    "nord",
+    "kanagawa",
+    "everforest",
+    "wazir-dark",
+    "wazir-light",
+];
+
+fn resolve_wazir_home_dir() -> std::path::PathBuf {
+    if let Ok(custom) = std::env::var("WAZIR_HOME") {
+        let trimmed = custom.trim();
+        if !trimmed.is_empty() {
+            return std::path::PathBuf::from(trimmed);
+        }
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        return std::path::PathBuf::from(home).join(".wazir");
+    }
+    std::env::temp_dir().join(".wazir")
+}
+
+#[tauri::command]
+fn get_wazir_theme() -> Result<serde_json::Value, String> {
+    let theme_path = resolve_wazir_home_dir().join("theme.json");
+    if let Ok(raw) = std::fs::read_to_string(&theme_path) {
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&raw) {
+            if let Some(id) = val.get("themeId").and_then(|v| v.as_str()) {
+                if SUPPORTED_THEME_IDS.contains(&id) {
+                    return Ok(serde_json::json!({ "themeId": id }));
+                }
+            }
+        }
+    }
+    Ok(serde_json::json!({ "themeId": "tokyo-night" }))
+}
+
+#[tauri::command]
+fn set_wazir_theme(theme_id: String) -> Result<serde_json::Value, String> {
+    let normalized = theme_id.trim().to_lowercase();
+    if !SUPPORTED_THEME_IDS.contains(&normalized.as_str()) {
+        return Err(format!("Unsupported theme '{}'", theme_id));
+    }
+    let home = resolve_wazir_home_dir();
+    std::fs::create_dir_all(&home).map_err(|e| format!("Failed to create Wazir home: {e}"))?;
+    let theme_path = home.join("theme.json");
+    let updated_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs().to_string())
+        .unwrap_or_default();
+    let payload = serde_json::json!({
+        "themeId": normalized,
+        "updatedAt": updated_at
+    });
+    let serialized = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
+    std::fs::write(&theme_path, format!("{serialized}\n")).map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({ "themeId": normalized }))
+}
+
+fn is_valid_custom_command_name(name: &str) -> bool {
+    let trimmed = name.trim();
+    !trimmed.is_empty()
+        && trimmed.len() <= 64
+        && !trimmed.contains("..")
+        && trimmed
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
+}
+
+#[tauri::command]
+fn list_wazir_custom_commands() -> Result<Vec<serde_json::Value>, String> {
+    let dir = resolve_wazir_home_dir().join("commands");
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Ok(out);
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("json") {
+            continue;
+        }
+        if let Ok(raw) = std::fs::read_to_string(&path) {
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&raw) {
+                if val.get("command").and_then(|v| v.as_str()).is_some() {
+                    out.push(val);
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+#[tauri::command]
+fn save_wazir_custom_command(
+    name: String,
+    description: String,
+    command: String,
+    mode: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let trimmed_name = name.trim();
+    if !is_valid_custom_command_name(trimmed_name) {
+        return Err(format!("Invalid custom command name '{}'", name));
+    }
+    let trimmed_cmd = command.trim();
+    if trimmed_cmd.is_empty() {
+        return Err("Custom command cannot be empty".to_string());
+    }
+    let dir = resolve_wazir_home_dir().join("commands");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Failed to create commands dir: {e}"))?;
+    let payload = serde_json::json!({
+        "name": trimmed_name,
+        "description": if description.trim().is_empty() { format!("Custom command: {trimmed_cmd}") } else { description.trim().to_string() },
+        "command": trimmed_cmd,
+        "mode": mode.unwrap_or_else(|| "shell".to_string()),
+    });
+    let file_path = dir.join(format!("{trimmed_name}.json"));
+    let serialized = serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?;
+    std::fs::write(&file_path, format!("{serialized}\n")).map_err(|e| e.to_string())?;
+    Ok(payload)
+}
+
 #[tauri::command]
 fn get_about_info() -> AboutInfo {
     AboutInfo {
@@ -437,8 +576,58 @@ fn main() {
             control_wazir_job,
             inspect_wazir_job,
             get_about_info,
-            open_mission_control
+            open_mission_control,
+            get_wazir_theme,
+            set_wazir_theme,
+            list_wazir_custom_commands,
+            save_wazir_custom_command
         ])
         .run(tauri::generate_context!())
         .expect("error running Wazir Shell");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolves_default_shell_and_node_binary() {
+        assert!(!default_shell().is_empty());
+        assert!(!resolve_node_binary().is_empty());
+    }
+
+    #[test]
+    fn returns_about_info_with_package_version() {
+        let info = get_about_info();
+        assert_eq!(info.name, "Wazir Shell");
+        assert_eq!(info.version, env!("CARGO_PKG_VERSION"));
+    }
+
+    #[test]
+    fn persists_wazir_theme_and_custom_commands_in_isolated_home() {
+        let temp_home = std::env::temp_dir().join(format!("wazir-shell-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp_home);
+        std::env::set_var("WAZIR_HOME", &temp_home);
+
+        let set_res = set_wazir_theme("catppuccin".to_string()).expect("set theme");
+        assert_eq!(set_res["themeId"], "catppuccin");
+        let get_res = get_wazir_theme().expect("get theme");
+        assert_eq!(get_res["themeId"], "catppuccin");
+        assert!(set_wazir_theme("nonexistent-theme".to_string()).is_err());
+
+        let saved = save_wazir_custom_command(
+            "hello".to_string(),
+            "Say hello".to_string(),
+            "echo hello".to_string(),
+            Some("shell".to_string()),
+        )
+        .expect("save custom command");
+        assert_eq!(saved["name"], "hello");
+        let listed = list_wazir_custom_commands().expect("list custom commands");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0]["name"], "hello");
+
+        let _ = std::fs::remove_dir_all(&temp_home);
+        std::env::remove_var("WAZIR_HOME");
+    }
 }

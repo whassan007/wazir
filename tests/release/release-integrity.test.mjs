@@ -4,6 +4,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { assertUniqueArtifacts, validateVersion, verifyChecksums } from '../../scripts/release-integrity.mjs';
+import { validateCachedEvidence } from '../../scripts/release-gate.mjs';
 
 const { describe, it } = process.env.VITEST ? await import('vitest') : await import('node:test');
 
@@ -32,5 +33,13 @@ describe('release integrity checks', () => {
   });
   it('rejects duplicate artifact basenames', () => {
     assert.throws(() => assertUniqueArtifacts(['/a/x.tgz', '/b/x.tgz']), /duplicate/);
+  });
+  it('validates cached release-gate evidence against source version, commit, and bundle hash', () => {
+    const expected = { version: '0.4.1', commit: 'abc123', bundleSha256: 'deadbeef' };
+    assert.equal(validateCachedEvidence({ version: '0.4.1', commit: 'abc123', hostId: 'linux-x64', bundleSha256: 'deadbeef' }, expected, 'linux-x64'), true);
+    assert.equal(validateCachedEvidence({ version: '0.4.0', commit: 'abc123', hostId: 'linux-x64' }, expected, 'linux-x64'), false);
+    assert.equal(validateCachedEvidence({ version: '0.4.1', commit: 'oldsha', hostId: 'linux-x64' }, expected, 'linux-x64'), false);
+    assert.equal(validateCachedEvidence({ version: '0.4.1', commit: 'abc123', hostId: 'darwin-arm64' }, expected, 'linux-x64'), false);
+    assert.equal(validateCachedEvidence({ version: '0.4.1', commit: 'abc123', hostId: 'linux-x64', bundleSha256: 'stale' }, expected, 'linux-x64'), false);
   });
 });

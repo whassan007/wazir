@@ -7,7 +7,7 @@
 | **macOS (Sonoma / Sequoia / Tahoe)** | `arm64` (Apple Silicon) | Supported | Supported | Apple Metal / MLX Unified Memory | LM Studio, Ollama, MLX, llama.cpp | **Verified (M-Series)** |
 | **macOS (Ventura / Sonoma)** | `x64` (Intel) | Supported | Supported | CPU (AVX2), eGPU AMD Metal | Ollama, llama.cpp | **Verified** |
 | **Windows 10 / 11 / Server** | `x64` | Supported | Supported | NVIDIA CUDA, DirectML | LM Studio, Ollama, WSL2 | **Verified** |
-| **Windows 11 on Snapdragon** | `arm64` | Experimental | Experimental | Qualcomm Hexagon NPU | ONNX Runtime, llama.cpp | **Preview / Experimental** |
+| **Windows 11 on Snapdragon** | `arm64` | Preview / Experimental | Preview / Experimental | Qualcomm Hexagon NPU (not yet hardware-gated) | Source & CLI (`Node.js >= 22.13` ARM64), CI binary built on `windows-11-arm` | **Preview / Experimental** |
 
 ---
 

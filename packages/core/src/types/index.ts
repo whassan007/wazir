@@ -69,3 +69,4 @@ export type { BudgetConsumption } from './governance.js';
 export type { DiagnosticHint, FailureObservation, FailureIntelligence, ProgressStatus } from './failureIntelligence.js';
 export * from './harnessContract.js';
 export * from './portableCheckpoint.js';
+export * from './coordination.js';

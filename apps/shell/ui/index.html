@@ -133,6 +133,81 @@
     .modal h2 { margin-top: 0; font-size: 18px; color: var(--accent); }
     .modal p, .modal li { font-size: 12.5px; color: var(--muted); line-height: 1.5; }
     .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px; }
+    #terminal-grid {
+      flex: 1;
+      min-width: 0;
+      display: grid;
+      gap: 6px;
+      padding: 8px;
+      background: var(--bg);
+      overflow: hidden;
+    }
+    .terminal-pane {
+      display: flex;
+      flex-direction: column;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      overflow: hidden;
+      min-width: 0;
+      min-height: 0;
+    }
+    .terminal-pane.active {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px var(--accent);
+    }
+    .pane-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 4px 10px;
+      background: var(--panel2);
+      border-bottom: 1px solid var(--border);
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .pane-header-actions { display: flex; gap: 4px; }
+    .pane-header-actions button { padding: 2px 6px; font-size: 10px; }
+    .pane-output {
+      flex: 1;
+      margin: 0;
+      padding: 12px 14px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 13px;
+      line-height: 1.45;
+      color: var(--text);
+      outline: none;
+    }
+    .palette-card { width: min(640px, 94vw); padding: 0; overflow: hidden; }
+    .palette-input-wrap { padding: 12px 14px; border-bottom: 1px solid var(--border); background: var(--panel2); }
+    .palette-input {
+      width: 100%;
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 9px 12px;
+      font-size: 14px;
+      outline: none;
+    }
+    .palette-input:focus { border-color: var(--accent); }
+    .palette-list { max-height: 360px; overflow-y: auto; padding: 6px; }
+    .palette-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      gap: 12px;
+    }
+    .palette-item:hover, .palette-item.selected { background: var(--panel2); }
+    .palette-item-title { font-size: 13px; color: var(--text); font-weight: 500; }
+    .palette-item-desc { font-size: 11px; color: var(--muted); }
+    .palette-item-cat { font-size: 10px; text-transform: uppercase; padding: 2px 6px; border-radius: 4px; background: var(--bg); color: var(--accent); border: 1px solid var(--border); }
   </style>
 </head>
 <body>
@@ -140,6 +215,9 @@
     <div class="tabs" id="tabs"></div>
     <div class="actions">
       <span class="badge" id="diag-badge">Diagnostics: Pending</span>
+      <button id="palette-btn" title="Open Universal Command Palette (Cmd/Ctrl+K)">⌘K Menu</button>
+      <button id="split-v-btn" title="Split active pane vertically (Cmd/Ctrl+D)">+ Split V</button>
+      <button id="split-h-btn" title="Split active pane horizontally (Cmd/Ctrl+Shift+D)">+ Split H</button>
       <button id="jobs-drawer-btn" title="Toggle Live Loop, Graph & Goal Workflows Drawer">Workflows (0)</button>
       <button id="ctrlc-btn" title="Send SIGINT (Ctrl+C) to active PTY">Ctrl+C</button>
       <button id="clear-btn" title="Clear terminal buffer">Clear</button>
@@ -150,7 +228,7 @@
   </header>
 
   <div class="workspace">
-    <main id="terminal-output" aria-live="polite" tabindex="0" title="Click here for direct interactive PTY keyboard input, or use the command bar below"></main>
+    <main id="terminal-grid" aria-live="polite"></main>
     <aside class="jobs-drawer" id="jobs-drawer" aria-label="Workflows and Jobs">
       <div class="drawer-header">
         <span class="drawer-title">WORKFLOWS · LOOP / GRAPH / GOAL</span>
@@ -238,9 +316,86 @@
 
     const tabs = [];
     let activeId = null;
+    let customCommands = [];
 
-    const outputEl = document.getElementById('terminal-output');
+    const outputEl = document.getElementById('terminal-grid');
     const tabsEl = document.getElementById('tabs');
+
+    function getActiveTab() {
+      return tabs.find((t) => t.id === activeId) || null;
+    }
+
+    function getActivePane() {
+      const tab = getActiveTab();
+      if (!tab || !Array.isArray(tab.panes)) return null;
+      return tab.panes.find((p) => p.id === tab.activePaneId) || tab.panes[0] || null;
+    }
+
+    function findPaneBySessionId(sessionId) {
+      for (const tab of tabs) {
+        const pane = (tab.panes || []).find((p) => p.id === sessionId);
+        if (pane) return { tab, pane };
+      }
+      return null;
+    }
+
+    const WAZIR_THEMES = {
+      'tokyo-night': { name: 'Tokyo Night', tokens: { '--bg': '#1a1b26', '--panel': '#16161e', '--panel2': '#24283b', '--border': '#3b4261', '--text': '#c0caf5', '--muted': '#737aa2', '--accent': '#7aa2f7', '--ok': '#9ece6a', '--warn': '#e0af68', '--err': '#f7768e' } },
+      'catppuccin': { name: 'Catppuccin Mocha', tokens: { '--bg': '#1e1e2e', '--panel': '#181825', '--panel2': '#313244', '--border': '#45475a', '--text': '#cdd6f4', '--muted': '#9399b2', '--accent': '#cba6f7', '--ok': '#a6e3a1', '--warn': '#f9e2af', '--err': '#f38ba8' } },
+      'gruvbox': { name: 'Gruvbox Dark', tokens: { '--bg': '#282828', '--panel': '#1d2021', '--panel2': '#3c3836', '--border': '#504945', '--text': '#ebdbb2', '--muted': '#a89984', '--accent': '#fe8019', '--ok': '#b8bb26', '--warn': '#fabd2f', '--err': '#fb4934' } },
+      'rose-pine': { name: 'Rosé Pine', tokens: { '--bg': '#191724', '--panel': '#1f1d2e', '--panel2': '#26233a', '--border': '#403d52', '--text': '#e0def4', '--muted': '#908caa', '--accent': '#ebbcba', '--ok': '#9ccfd8', '--warn': '#f6c177', '--err': '#eb6f92' } },
+      'nord': { name: 'Nord', tokens: { '--bg': '#2e3440', '--panel': '#242933', '--panel2': '#3b4252', '--border': '#4c566a', '--text': '#eceff4', '--muted': '#9aa7bd', '--accent': '#88c0d0', '--ok': '#a3be8c', '--warn': '#ebcb8b', '--err': '#bf616a' } },
+      'kanagawa': { name: 'Kanagawa', tokens: { '--bg': '#1f1f28', '--panel': '#16161d', '--panel2': '#2a2a37', '--border': '#54546d', '--text': '#dcd7ba', '--muted': '#727169', '--accent': '#7e9cd8', '--ok': '#98bb6c', '--warn': '#e6c384', '--err': '#e82424' } },
+      'everforest': { name: 'Everforest', tokens: { '--bg': '#2d353b', '--panel': '#232a2e', '--panel2': '#343f44', '--border': '#4f585e', '--text': '#d3c6aa', '--muted': '#859289', '--accent': '#a7c080', '--ok': '#83c092', '--warn': '#dbbc7f', '--err': '#e67e80' } },
+      'wazir-dark': { name: 'Wazir Dark', tokens: { '--bg': '#0b0f17', '--panel': '#111827', '--panel2': '#1f2937', '--border': '#2d3748', '--text': '#f3f4f6', '--muted': '#9ca3af', '--accent': '#6366f1', '--ok': '#10b981', '--warn': '#f59e0b', '--err': '#ef4444' } },
+      'wazir-light': { name: 'Wazir Light', tokens: { '--bg': '#f8fafc', '--panel': '#ffffff', '--panel2': '#f1f5f9', '--border': '#cbd5e1', '--text': '#0f172a', '--muted': '#64748b', '--accent': '#4f46e5', '--ok': '#059669', '--warn': '#d97706', '--err': '#dc2626' } },
+    };
+
+    async function applyTheme(themeId, persist = true) {
+      const preset = WAZIR_THEMES[themeId] || WAZIR_THEMES['tokyo-night'];
+      const resolvedId = WAZIR_THEMES[themeId] ? themeId : 'tokyo-night';
+      const root = document.documentElement;
+      for (const [k, v] of Object.entries(preset.tokens)) {
+        root.style.setProperty(k, v);
+      }
+      localStorage.setItem('wazir_theme_preset', resolvedId);
+      if (persist && invoke) {
+        try { await invoke('set_wazir_theme', { themeId: resolvedId }); } catch {}
+      }
+      return resolvedId;
+    }
+
+    async function initTheme() {
+      let themeId = localStorage.getItem('wazir_theme_preset') || 'tokyo-night';
+      if (invoke) {
+        try {
+          const res = await invoke('get_wazir_theme');
+          if (res && res.themeId && WAZIR_THEMES[res.themeId]) {
+            themeId = res.themeId;
+          }
+        } catch {}
+      }
+      await applyTheme(themeId, false);
+    }
+
+    async function loadCustomCommands() {
+      if (invoke) {
+        try {
+          const list = await invoke('list_wazir_custom_commands');
+          if (Array.isArray(list)) {
+            customCommands = list;
+            return customCommands;
+          }
+        } catch {}
+      }
+      try {
+        const raw = localStorage.getItem('wazir_custom_commands');
+        customCommands = raw ? JSON.parse(raw) : [];
+      } catch {
+        customCommands = [];
+      }
+      return customCommands;
+    }
     const cmdForm = document.getElementById('cmd-form');
     const cmdInput = document.getElementById('cmd-input');
     const modeSelect = document.getElementById('mode-select');
@@ -714,23 +869,144 @@
     }
 
     function renderOutput() {
-      const active = tabs.find(t => t.id === activeId);
-      outputEl.textContent = active ? active.buffer : '';
-      outputEl.scrollTop = outputEl.scrollHeight;
+      const active = getActiveTab();
+      outputEl.innerHTML = '';
+      if (!active || !active.panes || active.panes.length === 0) return;
+      const panes = active.panes;
+      if (panes.length === 1) {
+        outputEl.style.gridTemplateColumns = '1fr';
+        outputEl.style.gridTemplateRows = '1fr';
+      } else if (active.splitDirection === 'horizontal') {
+        outputEl.style.gridTemplateColumns = '1fr';
+        outputEl.style.gridTemplateRows = `repeat(${panes.length}, minmax(0, 1fr))`;
+      } else {
+        outputEl.style.gridTemplateColumns = `repeat(${panes.length}, minmax(0, 1fr))`;
+        outputEl.style.gridTemplateRows = '1fr';
+      }
+
+      panes.forEach((pane, idx) => {
+        const card = document.createElement('section');
+        card.className = 'terminal-pane' + (pane.id === active.activePaneId ? ' active' : '');
+        card.onclick = () => {
+          if (active.activePaneId !== pane.id) {
+            active.activePaneId = pane.id;
+            renderOutput();
+          }
+        };
+
+        const hdr = document.createElement('div');
+        hdr.className = 'pane-header';
+        const title = document.createElement('span');
+        title.textContent = `Pane ${idx + 1} · ${pane.id}`;
+        const hdrActions = document.createElement('div');
+        hdrActions.className = 'pane-header-actions';
+        const splitVBtn = document.createElement('button');
+        splitVBtn.type = 'button';
+        splitVBtn.textContent = '◫';
+        splitVBtn.title = 'Split vertically (Cmd/Ctrl+D)';
+        splitVBtn.onclick = (ev) => { ev.stopPropagation(); active.activePaneId = pane.id; void splitActivePane('vertical'); };
+        const splitHBtn = document.createElement('button');
+        splitHBtn.type = 'button';
+        splitHBtn.textContent = '⊟';
+        splitHBtn.title = 'Split horizontally (Cmd/Ctrl+Shift+D)';
+        splitHBtn.onclick = (ev) => { ev.stopPropagation(); active.activePaneId = pane.id; void splitActivePane('horizontal'); };
+        const closeBtn = document.createElement('button');
+        closeBtn.type = 'button';
+        closeBtn.textContent = '×';
+        closeBtn.title = 'Close pane (Cmd/Ctrl+W)';
+        closeBtn.onclick = (ev) => { ev.stopPropagation(); void closeActivePane(pane.id); };
+        hdrActions.append(splitVBtn, splitHBtn, closeBtn);
+        hdr.append(title, hdrActions);
+
+        const pre = document.createElement('pre');
+        pre.className = 'pane-output';
+        pre.tabIndex = 0;
+        pre.textContent = pane.buffer;
+        pre.onfocus = () => { active.activePaneId = pane.id; };
+        pre.addEventListener('keydown', async (e) => {
+          if (e.metaKey || e.ctrlKey || e.altKey) return;
+          if (!invoke) return;
+          if (e.key === 'Enter') { e.preventDefault(); await invoke('pty_write', { sessionId: pane.id, data: '\r' }); }
+          else if (e.key === 'Backspace') { e.preventDefault(); await invoke('pty_write', { sessionId: pane.id, data: '\x7f' }); }
+          else if (e.key === 'Tab') { e.preventDefault(); await invoke('pty_write', { sessionId: pane.id, data: '\t' }); }
+          else if (e.key === 'ArrowUp') { e.preventDefault(); await invoke('pty_write', { sessionId: pane.id, data: '\x1b[A' }); }
+          else if (e.key === 'ArrowDown') { e.preventDefault(); await invoke('pty_write', { sessionId: pane.id, data: '\x1b[B' }); }
+          else if (e.key === 'ArrowRight') { e.preventDefault(); await invoke('pty_write', { sessionId: pane.id, data: '\x1b[C' }); }
+          else if (e.key === 'ArrowLeft') { e.preventDefault(); await invoke('pty_write', { sessionId: pane.id, data: '\x1b[D' }); }
+          else if (e.key.length === 1) { e.preventDefault(); await invoke('pty_write', { sessionId: pane.id, data: e.key }); }
+        });
+
+        card.append(hdr, pre);
+        outputEl.appendChild(card);
+        pre.scrollTop = pre.scrollHeight;
+      });
     }
 
     async function createTab() {
       if (!invoke) {
-        const id = 'web-' + (tabs.length + 1);
-        tabs.push({ id, buffer: '[Wazir Shell preview mode — launch via Tauri for native PTY]\n' });
+        const id = 'web-' + (tabs.length + 1) + '-p1';
+        tabs.push({
+          id,
+          splitDirection: 'vertical',
+          activePaneId: id,
+          panes: [{ id, buffer: '[Wazir Shell preview mode — launch via Tauri for native PTY]\n' }],
+        });
         activeId = id;
         renderTabs(); renderOutput();
         return;
       }
       const id = await invoke('pty_spawn', { cols: 120, rows: 32, cwd: null });
-      tabs.push({ id, buffer: '' });
+      tabs.push({
+        id,
+        splitDirection: 'vertical',
+        activePaneId: id,
+        panes: [{ id, buffer: '' }],
+      });
       activeId = id;
       renderTabs(); renderOutput();
+    }
+
+    async function splitActivePane(direction = 'vertical') {
+      const active = getActiveTab();
+      if (!active) return;
+      active.splitDirection = direction;
+      if (!invoke) {
+        const paneId = `${active.id}-p${active.panes.length + 1}-${Date.now().toString(36).slice(-3)}`;
+        active.panes.push({ id: paneId, buffer: `[Tiled ${direction} pane ${active.panes.length + 1}]\n` });
+        active.activePaneId = paneId;
+        renderOutput();
+        return;
+      }
+      const cols = direction === 'vertical' ? Math.max(40, Math.floor(120 / (active.panes.length + 1))) : 120;
+      const rows = direction === 'horizontal' ? Math.max(12, Math.floor(32 / (active.panes.length + 1))) : 32;
+      const paneId = await invoke('pty_spawn', { cols, rows, cwd: null });
+      active.panes.push({ id: paneId, buffer: '' });
+      active.activePaneId = paneId;
+      renderOutput();
+    }
+
+    async function closeActivePane(targetPaneId) {
+      const active = getActiveTab();
+      if (!active) return;
+      const paneId = targetPaneId || active.activePaneId;
+      if (active.panes.length <= 1) return;
+      const idx = active.panes.findIndex((p) => p.id === paneId);
+      if (idx === -1) return;
+      if (invoke) {
+        try { await invoke('pty_close', { sessionId: paneId }); } catch {}
+      }
+      active.panes.splice(idx, 1);
+      active.activePaneId = active.panes[Math.max(0, idx - 1)].id;
+      renderOutput();
+    }
+
+    function cyclePaneFocus(delta = 1) {
+      const active = getActiveTab();
+      if (!active || active.panes.length <= 1) return;
+      const idx = active.panes.findIndex((p) => p.id === active.activePaneId);
+      const nextIdx = (idx + delta + active.panes.length) % active.panes.length;
+      active.activePaneId = active.panes[nextIdx].id;
+      renderOutput();
     }
 
     function isLikelyShell(line) {
@@ -869,11 +1145,26 @@
     document.getElementById('about-btn').onclick = async () => {
       const modal = document.getElementById('about-modal');
       const body = document.getElementById('about-body');
+      body.textContent = '';
+      const appendLine = (label, value) => {
+        const p = document.createElement('p');
+        if (label) {
+          const strong = document.createElement('strong');
+          strong.textContent = label;
+          p.appendChild(strong);
+        }
+        p.appendChild(document.createTextNode(value));
+        body.appendChild(p);
+      };
       if (invoke) {
         const info = await invoke('get_about_info');
-        body.innerHTML = `<p><strong>${info.name}</strong> v${info.version}</p><p>Author: ${info.author}</p><p>Repo: ${info.repository}</p><p>Website: ${info.website}</p><p>License: ${info.license}</p>`;
+        appendLine(info.name, ` v${info.version}`);
+        appendLine('', `Author: ${info.author}`);
+        appendLine('', `Repo: ${info.repository}`);
+        appendLine('', `Website: ${info.website}`);
+        appendLine('', `License: ${info.license}`);
       } else {
-        body.innerHTML = '<p><strong>Wazir Shell</strong> v0.3.2 — Wael Hassan (whassan007)</p>';
+        appendLine('Wazir Shell', ' v0.4.1 — Wael Hassan (whassan007)');
       }
       modal.style.display = 'flex';
     };
@@ -905,11 +1196,11 @@
     if (listen) {
       listen('pty-output', (ev) => {
         const { session_id, data } = ev.payload;
-        const tab = tabs.find(t => t.id === session_id);
-        if (tab) {
-          tab.buffer += stripAnsi(data);
-          if (tab.buffer.length > 200000) tab.buffer = tab.buffer.slice(-150000);
-          if (session_id === activeId) renderOutput();
+        const found = findPaneBySessionId(session_id);
+        if (found) {
+          found.pane.buffer += stripAnsi(data);
+          if (found.pane.buffer.length > 200000) found.pane.buffer = found.pane.buffer.slice(-150000);
+          if (found.tab.id === activeId) renderOutput();
         }
       });
       listen('wazir-menu', (ev) => {
@@ -918,9 +1209,129 @@
       });
     }
 
+    // Command Palette (Cmd/Ctrl+K) + Tiling Shortcuts
+    const paletteModal = document.getElementById('command-palette-modal');
+    const paletteSearch = document.getElementById('palette-search');
+    const paletteList = document.getElementById('palette-list');
+    let paletteItems = [];
+    let paletteSelectedIdx = 0;
+
+    function buildPaletteItems() {
+      const items = [
+        { id: 'pane:split-v', cat: 'Pane', title: 'Split Pane Vertically', desc: 'Cmd/Ctrl+D', run: () => splitActivePane('vertical') },
+        { id: 'pane:split-h', cat: 'Pane', title: 'Split Pane Horizontally', desc: 'Cmd/Ctrl+Shift+D', run: () => splitActivePane('horizontal') },
+        { id: 'pane:next', cat: 'Pane', title: 'Focus Next Pane', desc: 'Alt+ArrowRight', run: () => cyclePaneFocus(1) },
+        { id: 'pane:close', cat: 'Pane', title: 'Close Active Pane', desc: 'Cmd/Ctrl+W', run: () => closeActivePane() },
+        { id: 'tab:new', cat: 'Tab', title: 'New Terminal Tab', desc: 'Open a fresh PTY tab', run: () => createTab() },
+      ];
+      for (const [id, preset] of Object.entries(WAZIR_THEMES)) {
+        items.push({ id: `theme:${id}`, cat: 'Theme', title: `Theme: ${preset.name}`, desc: `Switch surface to ${id}`, run: () => applyTheme(id, true) });
+      }
+      for (const m of ['auto', 'shell', 'ai', 'loop', 'graph', 'goal']) {
+        items.push({ id: `mode:${m}`, cat: 'Mode', title: `Routing Mode: ${m}`, desc: `Set command bar mode to ${m}`, run: () => { modeSelect.value = m; updateRouteBadge(); } });
+      }
+      for (const c of customCommands) {
+        items.push({
+          id: `cmd:${c.name}`,
+          cat: 'Custom',
+          title: `Run: ${c.name}`,
+          desc: c.description || c.command,
+          run: () => {
+            cmdInput.value = c.command;
+            cmdForm.dispatchEvent(new Event('submit', { cancelable: true }));
+          },
+        });
+      }
+      return items;
+    }
+
+    function renderPaletteList() {
+      const q = paletteSearch.value.trim().toLowerCase();
+      const all = buildPaletteItems();
+      paletteItems = q ? all.filter((i) => i.title.toLowerCase().includes(q) || i.desc.toLowerCase().includes(q) || i.cat.toLowerCase().includes(q)) : all;
+      if (paletteSelectedIdx >= paletteItems.length) paletteSelectedIdx = Math.max(0, paletteItems.length - 1);
+      paletteList.innerHTML = '';
+      paletteItems.forEach((item, idx) => {
+        const row = document.createElement('div');
+        row.className = 'palette-item' + (idx === paletteSelectedIdx ? ' selected' : '');
+        row.innerHTML = `<div><div class="palette-item-title">${item.title}</div><div class="palette-item-desc">${item.desc}</div></div><span class="palette-item-cat">${item.cat}</span>`;
+        row.onclick = async () => {
+          closeCommandPalette();
+          await item.run();
+        };
+        paletteList.appendChild(row);
+      });
+    }
+
+    function openCommandPalette() {
+      paletteSelectedIdx = 0;
+      paletteSearch.value = '';
+      renderPaletteList();
+      paletteModal.style.display = 'flex';
+      paletteSearch.focus();
+    }
+
+    function closeCommandPalette() {
+      paletteModal.style.display = 'none';
+    }
+
+    paletteSearch.addEventListener('input', () => { paletteSelectedIdx = 0; renderPaletteList(); });
+    paletteSearch.addEventListener('keydown', async (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); closeCommandPalette(); }
+      else if (e.key === 'ArrowDown') { e.preventDefault(); paletteSelectedIdx = Math.min(paletteItems.length - 1, paletteSelectedIdx + 1); renderPaletteList(); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); paletteSelectedIdx = Math.max(0, paletteSelectedIdx - 1); renderPaletteList(); }
+      else if (e.key === 'Enter' && paletteItems[paletteSelectedIdx]) {
+        e.preventDefault();
+        const item = paletteItems[paletteSelectedIdx];
+        closeCommandPalette();
+        await item.run();
+      }
+    });
+    paletteModal.addEventListener('click', (e) => { if (e.target === paletteModal) closeCommandPalette(); });
+
+    document.getElementById('palette-btn').onclick = () => openCommandPalette();
+    document.getElementById('split-v-btn').onclick = () => void splitActivePane('vertical');
+    document.getElementById('split-h-btn').onclick = () => void splitActivePane('horizontal');
+
+    window.addEventListener('keydown', (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        if (paletteModal.style.display === 'flex') closeCommandPalette();
+        else openCommandPalette();
+      } else if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'd') {
+        e.preventDefault();
+        void splitActivePane('horizontal');
+      } else if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === 'd') {
+        e.preventDefault();
+        void splitActivePane('vertical');
+      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'w') {
+        const active = getActiveTab();
+        if (active && active.panes.length > 1) {
+          e.preventDefault();
+          void closeActivePane();
+        }
+      } else if (e.altKey && (e.key === 'ArrowRight' || e.key === 'ArrowDown')) {
+        e.preventDefault();
+        cyclePaneFocus(1);
+      } else if (e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowUp')) {
+        e.preventDefault();
+        cyclePaneFocus(-1);
+      }
+    });
+
     initConsent();
+    void initTheme();
+    void loadCustomCommands();
     createTab();
     void refreshWorkflowJobs();
   </script>
+  <div class="modal-backdrop" id="command-palette-modal" style="display:none;">
+    <div class="modal-card palette-card" role="dialog" aria-modal="true" aria-label="Wazir Command Palette">
+      <div class="palette-input-wrap">
+        <input id="palette-search" class="palette-input" type="text" placeholder="Type a command, theme, mode, or pane action..." autocomplete="off" />
+      </div>
+      <div class="palette-list" id="palette-list"></div>
+    </div>
+  </div>
 </body>
 </html>

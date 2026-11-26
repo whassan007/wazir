@@ -45,7 +45,7 @@ globalStartupProfiler.mark('cli.entry');
 // only ever handled inside the TUI, and only while it was running.
 installGlobalCrashHandlers();
 
-export const CLI_VERSION = typeof __WAZIR_VERSION__ === 'string' ? __WAZIR_VERSION__ : '0.4.1';
+export const CLI_VERSION = typeof __WAZIR_VERSION__ === 'string' ? __WAZIR_VERSION__ : '0.4.2';
 
 /**
  * Zero-overhead fast path for version flags (`--version`, `-V`, `version`, `version --json`).
@@ -1354,19 +1354,27 @@ program.addCommand(discoverCmd);
 // agents command
 const agentsCmd = new Command()
   .name('agents')
-  .description('Manage agents');
+  .description('Manage agents')
+  .option('-j, --json', 'Output JSON')
+  .action(async (options: { json?: boolean }) => {
+    const { agentsStatusCommand } = await import('./commands/fabricCommands.js');
+    const res = await agentsStatusCommand({ json: Boolean(options.json) });
+    console.log(res.output);
+    if (res.code !== 0) process.exitCode = res.code;
+  });
 
 agentsCmd
   .command('list')
   .description('List registered agents')
   .option('--json', 'Output JSON including discovery and connection states')
   .action(async (options) => {
+    const json = Boolean(options.json ?? agentsCmd.opts().json);
     const { createEngine } = await import('./engine.js');
     const engine = await createEngine();
     const { listAgents } = await import('./commands.js');
     const { AgentConnectionManager } = await import('./agentConnectionManager.js');
     const discovered = new AgentConnectionManager(engine).discover();
-    console.log(options.json ? JSON.stringify({ registered: engine.agents.list(), agents: discovered }, null, 2) : `${listAgents(engine)}\n${discovered.map(a => `${a.agent}: ${a.state}`).join('\n')}`);
+    console.log(json ? JSON.stringify({ registered: engine.agents.list(), agents: discovered }, null, 2) : `${listAgents(engine)}\n${discovered.map(a => `${a.agent}: ${a.state}`).join('\n')}`);
   });
 
 for (const verb of ['discover', 'refresh', 'inspect', 'explain']) {
@@ -1375,6 +1383,7 @@ for (const verb of ['discover', 'refresh', 'inspect', 'explain']) {
     .option('--trust-project', 'Authorize reading project settings for inspection; does not execute them')
     .description('Inspect native configuration declarations and provenance without launching agents')
     .action(async (name, options) => {
+      const json = Boolean(options.json ?? agentsCmd.opts().json);
       const { AgentConfigurationDiscovery } = await import('@wazir/agents');
       const { loadPreflightCache, invalidateAgentPreflight } = await import('./agentPreflight.js');
       const { isPreflightFresh, effectivePreflightStatus } = await import('@wazir/agents');
@@ -1387,7 +1396,7 @@ for (const verb of ['discover', 'refresh', 'inspect', 'explain']) {
           authentication: fresh && connection.status === 'READY' ? 'VERIFIED' : 'UNKNOWN',
           verificationScope: 'Connection probes use an empty temporary workspace, not project instructions or project model overrides.' };
       });
-      console.log(options.json ? JSON.stringify({ agents }, null, 2) : agents.map(a => `${a.agent}: ${a.state}\nExecutable: ${a.executable ?? 'not found'}\nModel: ${a.model.value ?? 'unknown'} (${a.model.status})\n${a.sources.map(s => `  ${s.path} [${s.scope}, ${s.trusted ? 'trusted' : 'untrusted'}]`).join('\n')}\n${a.diagnostics.join('\n')}`).join('\n\n'));
+      console.log(json ? JSON.stringify({ agents }, null, 2) : agents.map(a => `${a.agent}: ${a.state}\nExecutable: ${a.executable ?? 'not found'}\nModel: ${a.model.value ?? 'unknown'} (${a.model.status})\n${a.sources.map(s => `  ${s.path} [${s.scope}, ${s.trusted ? 'trusted' : 'untrusted'}]`).join('\n')}\n${a.diagnostics.join('\n')}`).join('\n\n'));
       if (!agents.length) process.exitCode = 1;
     });
 }
@@ -1396,22 +1405,24 @@ agentsCmd.command('connect').argument('<name>', 'Agent or configured account ins
   .option('--json', 'Output JSON').option('--timeout <seconds>', 'Bounded preflight timeout', '90')
   .description('Verify the existing vendor login through a real bounded agent task')
   .action(async (name, options) => {
+    const json = Boolean(options.json ?? agentsCmd.opts().json);
     const { createEngine } = await import('./engine.js');
     const { AgentConnectionManager } = await import('./agentConnectionManager.js');
     const engine = await createEngine({ readOnlyLifecycle: true, quiet: true });
     const results = await new AgentConnectionManager(engine).connect([name], { fresh: true, timeoutMs: Number(options.timeout) * 1000 });
     const { renderPreflight } = await import('./agentPreflight.js');
-    console.log(options.json ? JSON.stringify({ agents: results }, null, 2) : renderPreflight(results));
+    console.log(json ? JSON.stringify({ agents: results }, null, 2) : renderPreflight(results));
     process.exit(results.every(r => r.status === 'READY') ? 0 : 1);
   });
 
 agentsCmd.command('capabilities').description('List registered agent capabilities and their providers')
   .option('--json', 'Output JSON')
   .action(async (options: { json?: boolean }) => {
+    const json = Boolean(options.json ?? agentsCmd.opts().json);
     const { createEngine } = await import('./engine.js');
     const engine = await createEngine({ readOnlyLifecycle: true });
     const catalog = engine.agents.catalog();
-    console.log(options.json ? JSON.stringify({ capabilities: catalog }) : catalog.map(entry => `${entry.capability}: ${entry.agents.join(', ')}`).join('\n'));
+    console.log(json ? JSON.stringify({ capabilities: catalog }) : catalog.map(entry => `${entry.capability}: ${entry.agents.join(', ')}`).join('\n'));
   });
 
 agentsCmd
@@ -1422,11 +1433,12 @@ agentsCmd
   .option('--json', 'Output in JSON format')
   .description('Check that external agents (Claude Code, Codex, Qwen Code, Gemini, Antigravity) can actually run a task')
   .action(async (names: string[], options) => {
+    const json = Boolean(options.json ?? agentsCmd.opts().json);
     const { createEngine } = await import('./engine.js');
     const engine = await createEngine();
     const { checkAgents, renderPreflight } = await import('./agentPreflight.js');
     const results = await checkAgents(engine, names, { fresh: options.fresh, timeoutMs: Number(options.timeout) * 1000 });
-    console.log(options.json ? JSON.stringify({ agents: results }, null, 2) : renderPreflight(results));
+    console.log(json ? JSON.stringify({ agents: results }, null, 2) : renderPreflight(results));
     process.exit(results.length > 0 && results.every((r) => r.status === 'READY') ? 0 : 1);
   });
 
@@ -2828,6 +2840,73 @@ serviceCmd
 
 program.addCommand(serviceCmd);
 
+// Coordination fabric & fast inspection commands
+program
+  .command('tasks')
+  .description('List running, queued, and completed tasks across jobs and workflow runs')
+  .option('--job <jobId>', 'Filter tasks by job or workflow run ID')
+  .option('-s, --status <status>', 'Filter tasks by status (running, pending, ready, assigned, blocked, completed, failed, cancelled, queued)')
+  .option('--workspace <dir>', 'Workspace root directory')
+  .option('-j, --json', 'Output JSON')
+  .action(async (options: { job?: string; status?: string; workspace?: string; json?: boolean }) => {
+    const { tasksCommand } = await import('./commands/fabricCommands.js');
+    const res = await tasksCommand(options);
+    console.log(res.output);
+    if (res.code !== 0) process.exitCode = res.code;
+  });
+
+program
+  .command('messages <jobId>')
+  .description('Inspect coordination messages for a job or workflow run')
+  .option('--agent <agentId>', 'Filter messages by sender or recipient agent')
+  .option('--task <taskId>', 'Filter messages by task ID')
+  .option('-j, --json', 'Output JSON')
+  .action(async (jobId: string, options: { agent?: string; task?: string; json?: boolean }) => {
+    const { messagesCommand } = await import('./commands/fabricCommands.js');
+    const res = await messagesCommand(jobId, options);
+    console.log(res.output);
+    if (res.code !== 0) process.exitCode = res.code;
+  });
+
+program
+  .command('trace <executionId>')
+  .description('Inspect chronological execution and coordination fabric trace for an execution')
+  .option('-j, --json', 'Output JSON')
+  .action(async (executionId: string, options: { json?: boolean }) => {
+    const { traceCommand } = await import('./commands/fabricCommands.js');
+    const res = await traceCommand(executionId, options);
+    console.log(res.output);
+    if (res.code !== 0) process.exitCode = res.code;
+  });
+
+const fabricCmd = new Command()
+  .name('fabric')
+  .description('Inspect and diagnose the coordination fabric');
+
+fabricCmd
+  .command('status')
+  .description('Show coordination fabric transport, broker circuit, outbox/DLQ, inboxes, leases, and stale consumers')
+  .option('-j, --json', 'Output JSON')
+  .action(async (options: { json?: boolean }) => {
+    const { fabricStatusCommand } = await import('./commands/fabricCommands.js');
+    const res = await fabricStatusCommand(options);
+    console.log(res.output);
+    if (res.code !== 0) process.exitCode = res.code;
+  });
+
+fabricCmd
+  .command('diagnose')
+  .description('Run non-blocking coordination fabric self-checks and bounded NATS TCP probe')
+  .option('-j, --json', 'Output JSON')
+  .action(async (options: { json?: boolean }) => {
+    const { fabricDiagnoseCommand } = await import('./commands/fabricCommands.js');
+    const res = await fabricDiagnoseCommand(options);
+    console.log(res.output);
+    if (res.code !== 0) process.exitCode = res.code;
+  });
+
+program.addCommand(fabricCmd);
+
 globalStartupProfiler.mark('cli.commands_registered');
 
 const ROOT_OPTIONS_TAKING_VALUE = new Set([
@@ -2991,37 +3070,140 @@ async function handleRootConversationOrPrompt(rawArgs: string[]): Promise<void> 
   process.exit(2);
 }
 
-async function tryDispatchFastSubcommand(rawArgs: string[]): Promise<boolean> {
+interface FastSubcommandScan {
+  rest: string[];
+  home?: string;
+  workspace?: string;
+  json: boolean;
+}
+
+function splitLeadingFastGlobalOptions(rawArgs: string[]): FastSubcommandScan | undefined {
+  let home: string | undefined;
+  let workspace: string | undefined;
+  let json = false;
+  let i = 0;
+
+  while (i < rawArgs.length) {
+    const tok = rawArgs[i]!;
+    if (tok === '--no-color') {
+      i += 1;
+      continue;
+    }
+    if (tok === '--json' || tok === '-j') {
+      json = true;
+      i += 1;
+      continue;
+    }
+    if (tok === '--home' || tok === '--workspace') {
+      const next = rawArgs[i + 1];
+      if (!next) return undefined;
+      if (tok === '--home') home = next;
+      else workspace = next;
+      i += 2;
+      continue;
+    }
+    if (tok.startsWith('--home=')) {
+      home = tok.slice('--home='.length);
+      i += 1;
+      continue;
+    }
+    if (tok.startsWith('--workspace=')) {
+      workspace = tok.slice('--workspace='.length);
+      i += 1;
+      continue;
+    }
+    if (tok.startsWith('-')) {
+      return undefined;
+    }
+    break;
+  }
+
+  return { rest: rawArgs.slice(i), home, workspace, json };
+}
+
+function parseFastFlags(
+  tokens: string[],
+  valueFlags: ReadonlySet<string>,
+  boolFlags: ReadonlySet<string>,
+): { positionals: string[]; values: Record<string, string>; flags: Set<string> } | undefined {
+  const positionals: string[] = [];
+  const values: Record<string, string> = {};
+  const flags = new Set<string>();
+
+  for (let i = 0; i < tokens.length; i += 1) {
+    const tok = tokens[i]!;
+    if (tok === '--') {
+      positionals.push(...tokens.slice(i + 1));
+      break;
+    }
+    if (!tok.startsWith('-') || tok === '-') {
+      positionals.push(tok);
+      continue;
+    }
+    const eqIdx = tok.indexOf('=');
+    const flag = eqIdx > 0 ? tok.slice(0, eqIdx) : tok;
+    const inlineVal = eqIdx > 0 ? tok.slice(eqIdx + 1) : undefined;
+    if (boolFlags.has(flag)) {
+      if (inlineVal !== undefined) return undefined;
+      flags.add(flag);
+      continue;
+    }
+    if (valueFlags.has(flag)) {
+      const val = inlineVal !== undefined ? inlineVal : tokens[i + 1];
+      if (val === undefined) return undefined;
+      if (inlineVal === undefined) i += 1;
+      values[flag] = val;
+      continue;
+    }
+    return undefined;
+  }
+
+  return { positionals, values, flags };
+}
+
+function applyFastEnvOverrides(home?: string, workspace?: string): void {
+  if (home) process.env.WAZIR_HOME = home;
+  if (workspace) process.env.WAZIR_WORKSPACE_DIR = workspace;
+}
+
+export async function tryDispatchFastSubcommand(rawArgs: string[]): Promise<boolean> {
   if (rawArgs.length === 0 && invokedExecutableName === 'wazir' && !process.env.WAZIR_FORCE_TUI) {
     const { launchInteractiveWazirShell } = await import('./commands/shellCommand.js');
     await launchInteractiveWazirShell({ version: CLI_VERSION, batch: !process.stdin.isTTY });
     return true;
   }
 
-  const first = rawArgs[0];
-  if (!first || rawArgs.includes('-h') || rawArgs.includes('--help')) {
+  if (rawArgs.includes('-h') || rawArgs.includes('--help')) {
     return false;
   }
 
+  const scanned = splitLeadingFastGlobalOptions(rawArgs);
+  if (!scanned || scanned.rest.length === 0) {
+    return false;
+  }
+
+  const first = scanned.rest[0]!;
+  const tail = scanned.rest.slice(1);
+
   if (first === 'route') {
     const { runFastRouteCli } = await import('./commands/shellCommand.js');
-    const json = rawArgs.includes('--json') || rawArgs.includes('-j');
-    const promptParts = rawArgs.slice(1).filter((arg) => arg !== '--json' && arg !== '-j');
+    const json = scanned.json || tail.includes('--json') || tail.includes('-j');
+    const promptParts = tail.filter((arg) => arg !== '--json' && arg !== '-j');
     process.exitCode = await runFastRouteCli(promptParts, { json });
     return true;
   }
 
   if (first === 'latency') {
     const { runFastLatencyCli } = await import('./commands/shellCommand.js');
-    const json = rawArgs.includes('--json') || rawArgs.includes('-j');
-    const reset = rawArgs.includes('--reset');
+    const json = scanned.json || tail.includes('--json') || tail.includes('-j');
+    const reset = tail.includes('--reset');
     process.exitCode = await runFastLatencyCli({ json, reset });
     return true;
   }
 
   if (first === 'debug') {
     const { runFastDebugCli } = await import('./commands/shellCommand.js');
-    process.exitCode = await runFastDebugCli(rawArgs[1] ?? 'status');
+    process.exitCode = await runFastDebugCli(tail[0] ?? 'status');
     return true;
   }
 
@@ -3029,8 +3211,132 @@ async function tryDispatchFastSubcommand(rawArgs: string[]): Promise<boolean> {
     const { registerShellAndMetaCommands } = await import('./commands/shellCommand.js');
     const fastProgram = new Command().name(invokedExecutableName);
     registerShellAndMetaCommands(fastProgram, CLI_VERSION);
-    await fastProgram.parseAsync([process.argv[0] ?? 'node', process.argv[1] ?? 'wa', ...rawArgs]);
+    await fastProgram.parseAsync([process.argv[0] ?? 'node', process.argv[1] ?? 'wa', ...scanned.rest]);
     return true;
+  }
+
+  const commonBool = new Set(['--json', '-j', '--no-color']);
+  const commonValues = new Set(['--home', '--workspace']);
+
+  if (first === 'tasks') {
+    const parsed = parseFastFlags(
+      tail,
+      new Set([...commonValues, '--job', '--status', '-s']),
+      commonBool,
+    );
+    if (!parsed || parsed.positionals.length > 0) return false;
+    const home = parsed.values['--home'] ?? scanned.home;
+    const workspace = parsed.values['--workspace'] ?? scanned.workspace;
+    applyFastEnvOverrides(home, workspace);
+    const json = scanned.json || parsed.flags.has('--json') || parsed.flags.has('-j');
+    const { tasksCommand } = await import('./commands/fabricCommands.js');
+    const res = await tasksCommand({
+      job: parsed.values['--job'],
+      status: parsed.values['--status'] ?? parsed.values['-s'],
+      workspace,
+      json,
+    });
+    console.log(res.output);
+    if (res.code !== 0) process.exitCode = res.code;
+    return true;
+  }
+
+  if (first === 'messages') {
+    const parsed = parseFastFlags(
+      tail,
+      new Set([...commonValues, '--agent', '--task']),
+      commonBool,
+    );
+    if (!parsed || parsed.positionals.length !== 1) return false;
+    const home = parsed.values['--home'] ?? scanned.home;
+    const workspace = parsed.values['--workspace'] ?? scanned.workspace;
+    applyFastEnvOverrides(home, workspace);
+    const json = scanned.json || parsed.flags.has('--json') || parsed.flags.has('-j');
+    const { messagesCommand } = await import('./commands/fabricCommands.js');
+    const res = await messagesCommand(parsed.positionals[0]!, {
+      agent: parsed.values['--agent'],
+      task: parsed.values['--task'],
+      json,
+    });
+    console.log(res.output);
+    if (res.code !== 0) process.exitCode = res.code;
+    return true;
+  }
+
+  if (first === 'trace') {
+    const parsed = parseFastFlags(tail, commonValues, commonBool);
+    if (!parsed || parsed.positionals.length !== 1) return false;
+    const home = parsed.values['--home'] ?? scanned.home;
+    const workspace = parsed.values['--workspace'] ?? scanned.workspace;
+    applyFastEnvOverrides(home, workspace);
+    const json = scanned.json || parsed.flags.has('--json') || parsed.flags.has('-j');
+    const { traceCommand } = await import('./commands/fabricCommands.js');
+    const res = await traceCommand(parsed.positionals[0]!, { json });
+    console.log(res.output);
+    if (res.code !== 0) process.exitCode = res.code;
+    return true;
+  }
+
+  if (first === 'fabric') {
+    const sub = tail[0];
+    if (sub !== 'status' && sub !== 'diagnose') return false;
+    const parsed = parseFastFlags(tail.slice(1), commonValues, commonBool);
+    if (!parsed || parsed.positionals.length > 0) return false;
+    const home = parsed.values['--home'] ?? scanned.home;
+    const workspace = parsed.values['--workspace'] ?? scanned.workspace;
+    applyFastEnvOverrides(home, workspace);
+    const json = scanned.json || parsed.flags.has('--json') || parsed.flags.has('-j');
+    const { fabricStatusCommand, fabricDiagnoseCommand } = await import('./commands/fabricCommands.js');
+    const res = sub === 'status' ? await fabricStatusCommand({ json }) : await fabricDiagnoseCommand({ json });
+    console.log(res.output);
+    if (res.code !== 0) process.exitCode = res.code;
+    return true;
+  }
+
+  if (first === 'agents') {
+    const parsed = parseFastFlags(tail, commonValues, commonBool);
+    if (!parsed || parsed.positionals.length > 0) return false;
+    const home = parsed.values['--home'] ?? scanned.home;
+    const workspace = parsed.values['--workspace'] ?? scanned.workspace;
+    applyFastEnvOverrides(home, workspace);
+    const json = scanned.json || parsed.flags.has('--json') || parsed.flags.has('-j');
+    const { agentsStatusCommand } = await import('./commands/fabricCommands.js');
+    const res = await agentsStatusCommand({ json, workspace });
+    console.log(res.output);
+    if (res.code !== 0) process.exitCode = res.code;
+    return true;
+  }
+
+  if (first === 'graph') {
+    const parsed = parseFastFlags(
+      tail,
+      commonValues,
+      new Set([...commonBool, '--inspect']),
+    );
+    if (!parsed || parsed.positionals.length !== 1) return false;
+    const idOrGoal = parsed.positionals[0]!.trim();
+    const inspect = parsed.flags.has('--inspect');
+    if (!inspect && (!idOrGoal || /\s/.test(idOrGoal))) {
+      return false;
+    }
+    const home = parsed.values['--home'] ?? scanned.home;
+    const workspace = parsed.values['--workspace'] ?? scanned.workspace;
+    const prevHome = process.env.WAZIR_HOME;
+    const prevWs = process.env.WAZIR_WORKSPACE_DIR;
+    applyFastEnvOverrides(home, workspace);
+    const json = scanned.json || parsed.flags.has('--json') || parsed.flags.has('-j');
+    const { inspectGraphCommand } = await import('./commands/fabricCommands.js');
+    const inspected = await inspectGraphCommand(idOrGoal, { inspect, workspace, json });
+    if (inspected.found || inspect) {
+      console.log(inspected.result.output);
+      if (inspected.result.code !== 0) process.exitCode = inspected.result.code;
+      return true;
+    }
+    if (home && prevHome === undefined) delete process.env.WAZIR_HOME;
+    else if (home) process.env.WAZIR_HOME = prevHome;
+    if (workspace && prevWs === undefined) delete process.env.WAZIR_WORKSPACE_DIR;
+    else if (workspace) process.env.WAZIR_WORKSPACE_DIR = prevWs;
+    return false;
   }
 
   return false;

@@ -19,6 +19,7 @@ import {
   resolveEmbeddedAssetLocations,
 } from './liquidShellOrchestrator.js';
 import { computeLatencyPercentiles } from './telemetryService.js';
+import { expandUserCustomCommand, getUserCustomCommand } from './userCommandService.js';
 
 export type ExecutionTier = 0 | 1 | 2 | 3;
 
@@ -43,6 +44,10 @@ export type Tier0IntentKind =
   | 'debug_toggle'
   | 'route_explain'
   | 'latency_report'
+  | 'theme'
+  | 'commands'
+  | 'menu'
+  | 'custom_command'
   | 'shell_builtin'
   | 'control';
 
@@ -726,6 +731,82 @@ export function matchTier0Intent(
   // Unquoted shell operators always route to Tier 1 native shell
   if (hasUnquotedShellOperator(trimmed)) {
     return null;
+  }
+
+  // Coordinated Theme Engine (/theme, theme ...)
+  const themeMatch = /^(?:(?:wa|wazir)\s+)?\/?theme(?:\s+(.+))?$/i.exec(normalized);
+  if (themeMatch) {
+    const args = (themeMatch[1] ?? '').trim();
+    return {
+      tier: 0,
+      handler: 'tier0-theme',
+      reason: args ? `theme command '${args}'` : 'show active theme',
+      confidence: 1,
+      normalizedInput: normalized,
+      requiresConfirmation: false,
+      tier0Kind: 'theme',
+      tier0Payload: args,
+      wazirArgs: args,
+    };
+  }
+
+  // User extension directory (/commands, commands ...)
+  const commandsMatch = /^(?:(?:wa|wazir)\s+)?\/?commands(?:\s+(.+))?$/i.exec(normalized);
+  if (commandsMatch) {
+    const args = (commandsMatch[1] ?? '').trim();
+    return {
+      tier: 0,
+      handler: 'tier0-commands',
+      reason: args ? `custom commands '${args}'` : 'list custom commands',
+      confidence: 1,
+      normalizedInput: normalized,
+      requiresConfirmation: false,
+      tier0Kind: 'commands',
+      tier0Payload: args,
+      wazirArgs: args,
+    };
+  }
+
+  // Universal Command Palette (/menu, menu ...)
+  const menuMatch = /^(?:(?:wa|wazir)\s+)?\/?menu(?:\s+(.+))?$/i.exec(normalized);
+  if (menuMatch) {
+    const args = (menuMatch[1] ?? '').trim();
+    return {
+      tier: 0,
+      handler: 'tier0-menu',
+      reason: 'universal command palette',
+      confidence: 1,
+      normalizedInput: normalized,
+      requiresConfirmation: false,
+      tier0Kind: 'menu',
+      tier0Payload: args,
+      wazirArgs: args,
+    };
+  }
+
+  // Agent-malleable user custom commands (~/.wazir/commands/*.json or ~/.wazir/bin/*)
+  if (sessionMode !== 'ai') {
+    const firstSpace = normalized.search(/\s/);
+    const firstToken = firstSpace === -1 ? normalized : normalized.slice(0, firstSpace);
+    const restArgs = firstSpace === -1 ? '' : normalized.slice(firstSpace + 1).trim();
+    const customCmd = getUserCustomCommand(firstToken, {
+      wazirHome: (context as { env?: NodeJS.ProcessEnv }).env?.WAZIR_HOME,
+      env: (context as { env?: NodeJS.ProcessEnv }).env,
+    });
+    if (customCmd && customCmd.mode !== 'ai') {
+      const expanded = expandUserCustomCommand(customCmd, restArgs);
+      return {
+        tier: 0,
+        handler: 'tier0-custom-command',
+        reason: `User custom command '${customCmd.name}' (${customCmd.source ?? 'manifest'})`,
+        confidence: 1,
+        normalizedInput: normalized,
+        requiresConfirmation: Boolean(customCmd.confirm),
+        tier0Kind: 'custom_command',
+        tier0Payload: expanded,
+        shellCommand: expanded,
+      };
+    }
   }
 
   // Observability / diagnostic Tier 0 commands (allowed in all session modes unless escaped/piped)

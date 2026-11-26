@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type {
   AgentPhase,
   Job,
@@ -9,12 +10,14 @@ import type {
   JobTaskExecutor,
   JobTaskOutcome,
   Task,
+  TaskResourceLocks,
   TokenUsage,
   ExecutionCheckpoint,
   CheckpointCreateOptions,
   ForkExecutionResult,
   RollbackResult,
 } from '../types/index.js';
+import type { CoordinationEventType, ResourceLease } from '../types/coordination.js';
 import { tokensPerSecond } from '@wazir/shared';
 import { JobManager, type JobTaskInput } from './jobManager.js';
 import type { Scheduler, ScheduleInput } from './scheduler.js';
@@ -25,6 +28,15 @@ import type { ModelRegistry } from './modelRegistry.js';
 import type { RuntimeRegistry } from './runtimeRegistry.js';
 import type { ComputerRegistry } from './computerRegistry.js';
 import type { CheckpointService } from './checkpointService.js';
+import type { CoordinationFabric } from './coordinationFabric.js';
+import type { MessageRouter } from './messageRouter.js';
+import {
+  ResourceConflictError,
+  ResourceLeaseExpiredError,
+  StaleFencingTokenError,
+  type ReservationRequest,
+  type ResourceReservationManager,
+} from './resourceReservationManager.js';
 
 export interface JobOrchestratorOptions {
   scheduler: Scheduler;
@@ -38,6 +50,10 @@ export interface JobOrchestratorOptions {
   /** Shared job store. If omitted, a new in-process JobManager is created and held for the orchestrator's lifetime. */
   jobManager?: JobManager;
   taskExecutor?: JobTaskExecutor;
+  coordinationFabric?: CoordinationFabric;
+  messageRouter?: MessageRouter;
+  resourceReservations?: ResourceReservationManager;
+  workerId?: string;
 }
 
 export interface OrchestratorTaskAssignment {
@@ -68,6 +84,7 @@ interface ActiveJobHandle {
    *  rather than waiting for whatever task happens to finish next (or never, once paused
    *  with nothing in flight). */
   wakePump?: () => void;
+  jobCancelledEmitted?: boolean;
   resolve: (job: Job) => void;
   reject: (err: Error) => void;
 }
@@ -78,6 +95,10 @@ export class JobOrchestrator {
   private readonly jobManager: JobManager;
   private readonly taskExecutor?: JobTaskExecutor;
   private checkpointService?: CheckpointService;
+  private readonly coordinationFabric?: CoordinationFabric;
+  private readonly messageRouter?: MessageRouter;
+  private readonly resourceReservations?: ResourceReservationManager;
+  private readonly workerId: string;
 
   private readonly listeners = new Map<string, Set<(event: JobOrchestratorEvent) => void>>();
   private readonly steeringQueues = new Map<string, string[]>();
@@ -89,6 +110,10 @@ export class JobOrchestrator {
     this.checkpointService = options.checkpointService;
     this.jobManager = options.jobManager ?? new JobManager();
     this.taskExecutor = options.taskExecutor;
+    this.coordinationFabric = options.coordinationFabric;
+    this.messageRouter = options.messageRouter;
+    this.resourceReservations = options.resourceReservations;
+    this.workerId = options.workerId ?? `orchestrator-${randomUUID()}`;
   }
 
   setCheckpointService(checkpointService: CheckpointService): void {
@@ -101,6 +126,18 @@ export class JobOrchestrator {
 
   getJobManager(): JobManager {
     return this.jobManager;
+  }
+
+  getCoordinationFabric(): CoordinationFabric | undefined {
+    return this.coordinationFabric;
+  }
+
+  getMessageRouter(): MessageRouter | undefined {
+    return this.messageRouter;
+  }
+
+  getResourceReservations(): ResourceReservationManager | undefined {
+    return this.resourceReservations;
   }
 
   async createJob(params: {
@@ -157,6 +194,170 @@ export class JobOrchestrator {
     }
   }
 
+  private publishCoordinationEvent(event: {
+    type: CoordinationEventType;
+    workflowId: string;
+    taskId?: string;
+    agentId?: string;
+    workerId?: string;
+    fencingToken?: number;
+    payload?: Record<string, unknown>;
+  }): void {
+    if (!this.coordinationFabric) return;
+    try {
+      void Promise.resolve(
+        this.coordinationFabric.publish({
+          type: event.type,
+          workflowId: event.workflowId,
+          taskId: event.taskId,
+          sourceAgent: event.agentId ?? event.workerId ?? this.workerId,
+          fencingToken: event.fencingToken,
+          payload: event.payload ?? {},
+        }),
+      ).catch(() => undefined);
+    } catch {
+      // Never let coordination fabric failures crash the orchestrator
+    }
+  }
+
+  private extractTaskResourceLocks(node: JobNode, task: Task): TaskResourceLocks | undefined {
+    const rawTask = task as unknown as {
+      resourceLocks?: TaskResourceLocks;
+      workspacePaths?: Array<{ path: string; mode: 'read' | 'write' }>;
+      exclusiveResources?: string[];
+      metadata?: Record<string, unknown>;
+    };
+    const meta = {
+      ...(rawTask.metadata ?? {}),
+      ...(node.metadata ?? {}),
+    } as Record<string, unknown>;
+    const metaLocks = (meta.resourceLocks as TaskResourceLocks | undefined) ?? undefined;
+    const base = node.resourceLocks ?? rawTask.resourceLocks ?? metaLocks;
+
+    const workspacePaths =
+      base?.workspacePaths ??
+      rawTask.workspacePaths ??
+      (Array.isArray(meta.workspacePaths)
+        ? (meta.workspacePaths as Array<{ path: string; mode: 'read' | 'write' }>)
+        : undefined);
+    const exclusiveResources =
+      base?.exclusiveResources ??
+      rawTask.exclusiveResources ??
+      (Array.isArray(meta.exclusiveResources) ? (meta.exclusiveResources as string[]) : undefined);
+    const gitRepos =
+      base?.gitRepos ??
+      (Array.isArray(meta.gitRepos)
+        ? (meta.gitRepos as Array<{ repoPath: string; mode?: 'read' | 'write' }>)
+        : typeof meta.repoPath === 'string'
+          ? [{ repoPath: meta.repoPath, mode: (meta.repoMode as 'read' | 'write' | undefined) ?? 'write' }]
+          : undefined);
+    const worktrees =
+      base?.worktrees ??
+      (Array.isArray(meta.worktrees)
+        ? (meta.worktrees as Array<{ worktreePath: string; mode?: 'read' | 'write' }>)
+        : typeof meta.worktreePath === 'string'
+          ? [{ worktreePath: meta.worktreePath, mode: (meta.worktreeMode as 'read' | 'write' | undefined) ?? 'write' }]
+          : typeof meta.worktreeDir === 'string'
+            ? [{ worktreePath: meta.worktreeDir, mode: (meta.worktreeMode as 'read' | 'write' | undefined) ?? 'write' }]
+            : undefined);
+    const gpuSlots =
+      base?.gpuSlots ??
+      (Array.isArray(meta.gpuSlots)
+        ? (meta.gpuSlots as Array<{ computerId: string; gpuId?: string; gpuMemoryGB?: number }>)
+        : undefined);
+    const modelSlots =
+      base?.modelSlots ??
+      (Array.isArray(meta.modelSlots)
+        ? (meta.modelSlots as Array<{ runtimeId: string; modelId: string; maxConcurrentSlots?: number }>)
+        : undefined);
+    const computeBudgets =
+      base?.computeBudgets ??
+      (Array.isArray(meta.computeBudgets)
+        ? (meta.computeBudgets as Array<{ computerId: string; cpuCores?: number; memoryGB?: number }>)
+        : undefined);
+    const cpuCores = base?.cpuCores ?? (typeof meta.cpuCores === 'number' ? meta.cpuCores : undefined);
+    const memoryGB = base?.memoryGB ?? (typeof meta.memoryGB === 'number' ? meta.memoryGB : undefined);
+    const gpuMemoryGB = base?.gpuMemoryGB ?? (typeof meta.gpuMemoryGB === 'number' ? meta.gpuMemoryGB : undefined);
+
+    if (
+      !workspacePaths?.length &&
+      !exclusiveResources?.length &&
+      !gitRepos?.length &&
+      !worktrees?.length &&
+      !gpuSlots?.length &&
+      !modelSlots?.length &&
+      !computeBudgets?.length &&
+      cpuCores === undefined &&
+      memoryGB === undefined &&
+      gpuMemoryGB === undefined
+    ) {
+      return undefined;
+    }
+
+    return {
+      ...(workspacePaths?.length ? { workspacePaths } : {}),
+      ...(exclusiveResources?.length ? { exclusiveResources } : {}),
+      ...(gitRepos?.length ? { gitRepos } : {}),
+      ...(worktrees?.length ? { worktrees } : {}),
+      ...(gpuSlots?.length ? { gpuSlots } : {}),
+      ...(modelSlots?.length ? { modelSlots } : {}),
+      ...(computeBudgets?.length ? { computeBudgets } : {}),
+      ...(cpuCores !== undefined ? { cpuCores } : {}),
+      ...(memoryGB !== undefined ? { memoryGB } : {}),
+      ...(gpuMemoryGB !== undefined ? { gpuMemoryGB } : {}),
+    };
+  }
+
+  private locksRequireComputerId(locks: TaskResourceLocks): boolean {
+    const needsComputeComputer =
+      (locks.cpuCores !== undefined || locks.memoryGB !== undefined) && !locks.computeBudgets?.length;
+    const needsGpuComputer = locks.gpuMemoryGB !== undefined && !locks.gpuSlots?.length;
+    return needsComputeComputer || needsGpuComputer;
+  }
+
+  private buildReservationRequest(
+    jobId: string,
+    taskId: string,
+    locks: TaskResourceLocks,
+    computerId?: string,
+  ): ReservationRequest | undefined {
+    const gpuSlots =
+      locks.gpuSlots ??
+      (locks.gpuMemoryGB !== undefined && computerId
+        ? [{ computerId, gpuMemoryGB: locks.gpuMemoryGB }]
+        : undefined);
+    const computeBudgets =
+      locks.computeBudgets ??
+      ((locks.cpuCores !== undefined || locks.memoryGB !== undefined) && computerId
+        ? [{ computerId, cpuCores: locks.cpuCores, memoryGB: locks.memoryGB }]
+        : undefined);
+
+    if (
+      !locks.workspacePaths?.length &&
+      !locks.exclusiveResources?.length &&
+      !locks.gitRepos?.length &&
+      !locks.worktrees?.length &&
+      !gpuSlots?.length &&
+      !locks.modelSlots?.length &&
+      !computeBudgets?.length
+    ) {
+      return undefined;
+    }
+
+    return {
+      workerId: this.workerId,
+      workflowId: jobId,
+      taskId,
+      ...(locks.workspacePaths?.length ? { workspacePaths: locks.workspacePaths } : {}),
+      ...(locks.exclusiveResources?.length ? { exclusiveResources: locks.exclusiveResources } : {}),
+      ...(locks.gitRepos?.length ? { gitRepos: locks.gitRepos } : {}),
+      ...(locks.worktrees?.length ? { worktrees: locks.worktrees } : {}),
+      ...(gpuSlots?.length ? { gpuSlots } : {}),
+      ...(locks.modelSlots?.length ? { modelSlots: locks.modelSlots } : {}),
+      ...(computeBudgets?.length ? { computeBudgets } : {}),
+    };
+  }
+
   private async unknownMutationError(taskId: string): Promise<string | undefined> {
     for (const record of await this.executionEngine.listByTask(taskId)) {
       const call = this.executionEngine.findUnknownOutcomeToolCall(record.execution.id);
@@ -184,6 +385,13 @@ export class JobOrchestrator {
       jobId,
       taskId,
       instruction,
+    });
+    this.publishCoordinationEvent({
+      type: 'task.steered',
+      workflowId: jobId,
+      taskId,
+      workerId: this.workerId,
+      payload: { jobId, taskId, instruction },
     });
   }
 
@@ -309,6 +517,84 @@ export class JobOrchestrator {
       await this.jobManager.updateAgentState(jobId, taskId, 'cancelled', undefined, 'Cancelled by user');
     }
     this.emit(jobId, { type: 'task:cancelled', jobId, taskId });
+    this.publishCoordinationEvent({
+      type: 'task.cancelled',
+      workflowId: jobId,
+      taskId,
+      workerId: this.workerId,
+      payload: { jobId, taskId, reason: 'Cancelled by user' },
+    });
+    if (job) {
+      await this.propagateDownstreamCancellation(
+        job,
+        taskId,
+        `Cancelled due to cancelled dependency '${taskId}'`,
+        handle,
+      );
+    }
+    handle?.wakePump?.();
+  }
+
+  private async propagateDownstreamCancellation(
+    job: Job,
+    rootTaskId: string,
+    reason: string,
+    handle?: ActiveJobHandle,
+  ): Promise<void> {
+    const queue = [rootTaskId];
+    const visited = new Set<string>([rootTaskId]);
+
+    while (queue.length > 0) {
+      const currentId = queue.shift()!;
+      for (const depNode of job.graph.nodes) {
+        if (!depNode.dependencies.includes(currentId)) continue;
+        const depTaskId = depNode.taskId ?? depNode.id;
+        const edge = job.graph.edges.find(
+          (e) =>
+            e.from === currentId &&
+            (e.to === depNode.id || e.to === depTaskId || (depNode.taskId !== undefined && e.to === depNode.taskId)),
+        );
+        if ((edge?.condition ?? 'success') === 'always') continue;
+        if (visited.has(depTaskId)) continue;
+        visited.add(depTaskId);
+
+        const depTask = job.tasks.find((t) => t.id === depTaskId);
+        if (
+          depNode.state === 'completed' ||
+          depNode.state === 'failed' ||
+          depNode.state === 'cancelled' ||
+          depTask?.status === 'completed' ||
+          depTask?.status === 'failed'
+        ) {
+          continue;
+        }
+
+        if (handle) {
+          const taskAbort = handle.activeTasks.get(depTaskId);
+          if (taskAbort) {
+            taskAbort.abort();
+            handle.activeTasks.delete(depTaskId);
+            const executionId = handle.activeExecutions.get(depTaskId);
+            if (executionId) await this.cancelExecution(executionId);
+          }
+          handle.cancelledTaskIds.add(depTaskId);
+        }
+
+        if (depTask && depTask.status !== 'cancelled') {
+          await this.jobManager.updateTaskStatus(job.id, depTaskId, 'cancelled');
+        }
+        await this.jobManager.updateAgentState(job.id, depNode.id, 'cancelled', undefined, reason);
+        this.emit(job.id, { type: 'task:cancelled', jobId: job.id, taskId: depTaskId, error: reason });
+        this.publishCoordinationEvent({
+          type: 'task.cancelled',
+          workflowId: job.id,
+          taskId: depTaskId,
+          workerId: this.workerId,
+          payload: { jobId: job.id, taskId: depTaskId, reason, propagatedFrom: rootTaskId },
+        });
+        queue.push(depTaskId);
+      }
+    }
   }
 
   /**
@@ -345,11 +631,50 @@ export class JobOrchestrator {
         if (executionId) await this.cancelExecution(executionId);
         handle.cancelledTaskIds.add(taskId);
         this.emit(jobId, { type: 'task:cancelled', jobId, taskId, error: reason });
+        this.publishCoordinationEvent({
+          type: 'task.cancelled',
+          workflowId: jobId,
+          taskId,
+          workerId: this.workerId,
+          payload: { jobId, taskId, reason },
+        });
       }
       handle.activeTasks.clear();
     }
+    const job = this.jobManager.get(jobId);
+    if (job) {
+      for (const node of job.graph.nodes) {
+        const tId = node.taskId ?? node.id;
+        if (
+          node.state !== 'completed' &&
+          node.state !== 'failed' &&
+          node.state !== 'cancelled' &&
+          !handle?.cancelledTaskIds.has(tId)
+        ) {
+          handle?.cancelledTaskIds.add(tId);
+          this.emit(jobId, { type: 'task:cancelled', jobId, taskId: tId, error: reason });
+          this.publishCoordinationEvent({
+            type: 'task.cancelled',
+            workflowId: jobId,
+            taskId: tId,
+            workerId: this.workerId,
+            payload: { jobId, taskId: tId, reason },
+          });
+        }
+      }
+    }
     await this.jobManager.cancel(jobId);
     this.emit(jobId, { type: 'job:cancelled', jobId, error: reason });
+    if (handle) {
+      handle.jobCancelledEmitted = true;
+    }
+    this.publishCoordinationEvent({
+      type: 'job.cancelled',
+      workflowId: jobId,
+      workerId: this.workerId,
+      payload: { jobId, status: 'cancelled', reason },
+    });
+    handle?.wakePump?.();
   }
 
   private async cancelExecution(executionId: string): Promise<void> {
@@ -370,12 +695,24 @@ export class JobOrchestrator {
     await this.jobManager.pause(jobId);
     this.activeJobs.get(jobId)?.wakePump?.();
     this.emit(jobId, { type: 'job:paused', jobId });
+    this.publishCoordinationEvent({
+      type: 'job.paused',
+      workflowId: jobId,
+      workerId: this.workerId,
+      payload: { jobId, status: 'paused' },
+    });
   }
 
   async resumeJob(jobId: string): Promise<void> {
     await this.jobManager.resume(jobId);
     this.activeJobs.get(jobId)?.wakePump?.();
     this.emit(jobId, { type: 'job:resumed', jobId });
+    this.publishCoordinationEvent({
+      type: 'job.resumed',
+      workflowId: jobId,
+      workerId: this.workerId,
+      payload: { jobId, status: 'running' },
+    });
   }
 
   /** Wake pump loops for jobs waiting on deferred resource admission. */
@@ -435,15 +772,23 @@ export class JobOrchestrator {
       });
     }, Math.floor(this.jobManager.leaseMs / 3));
     timer.unref?.();
+    let runError: unknown;
     try {
       const job = await this.runOwnedJob(jobId, { ...options, signal: abort.signal });
       if (leaseError) throw leaseError;
       return job;
+    } catch (err) {
+      runError = err;
+      throw err;
     } finally {
       clearInterval(timer);
       options.signal?.removeEventListener('abort', onAbort);
       this.activeJobs.delete(jobId);
-      await this.jobManager.release(jobId);
+      try {
+        await this.jobManager.release(jobId);
+      } catch (releaseErr) {
+        if (!runError) throw releaseErr;
+      }
     }
   }
 
@@ -481,6 +826,12 @@ export class JobOrchestrator {
     const supersededTaskIds = new Set<string>();
 
     this.emit(jobId, { type: 'job:started', jobId });
+    this.publishCoordinationEvent({
+      type: 'job.started',
+      workflowId: jobId,
+      workerId: this.workerId,
+      payload: { jobId, status: 'running', concurrencyLimit },
+    });
 
     // No default: a job runs indefinitely unless a caller (job definition or
     // this run's options) explicitly sets timeoutSeconds. Local models can
@@ -553,12 +904,38 @@ export class JobOrchestrator {
 
         if (finalStatus === 'completed') {
           this.emit(jobId, { type: 'job:completed', jobId });
+          this.publishCoordinationEvent({
+            type: 'job.completed',
+            workflowId: jobId,
+            workerId: this.workerId,
+            payload: { jobId, status: 'completed' },
+          });
         } else if (timedOut) {
           this.emit(jobId, { type: 'job:failed', jobId, error: `Timed out after ${timeoutSeconds}s` });
+          this.publishCoordinationEvent({
+            type: 'job.failed',
+            workflowId: jobId,
+            workerId: this.workerId,
+            payload: { jobId, status: 'failed', error: `Timed out after ${timeoutSeconds}s` },
+          });
         } else if (finalStatus === 'cancelled') {
           this.emit(jobId, { type: 'job:cancelled', jobId });
+          if (!handle.jobCancelledEmitted) {
+            this.publishCoordinationEvent({
+              type: 'job.cancelled',
+              workflowId: jobId,
+              workerId: this.workerId,
+              payload: { jobId, status: 'cancelled' },
+            });
+          }
         } else {
           this.emit(jobId, { type: 'job:failed', jobId, error: 'One or more tasks failed' });
+          this.publishCoordinationEvent({
+            type: 'job.failed',
+            workflowId: jobId,
+            workerId: this.workerId,
+            payload: { jobId, status: 'failed', error: 'One or more tasks failed' },
+          });
         }
 
         resolve(job);
@@ -632,10 +1009,31 @@ export class JobOrchestrator {
           const taskAbort = new AbortController();
           activeTasks.set(taskId, taskAbort);
 
+          const locks = this.extractTaskResourceLocks(node, task);
+          let resourceLease: ResourceLease | undefined;
+          if (this.resourceReservations && locks && !this.locksRequireComputerId(locks)) {
+            const preReq = this.buildReservationRequest(job.id, taskId, locks);
+            if (preReq) {
+              try {
+                resourceLease = await this.resourceReservations.acquire(preReq);
+              } catch (err) {
+                if (err instanceof ResourceConflictError) {
+                  activeTasks.delete(taskId);
+                  readyNodes.unshift(node);
+                  break;
+                }
+                throw err;
+              }
+            }
+          }
+
           let assignment: OrchestratorTaskAssignment | null = null;
           try {
             assignment = await this.assignTask(job.id, taskId);
           } catch (err) {
+            if (resourceLease && this.resourceReservations) {
+              await this.resourceReservations.release(resourceLease.leaseId, this.workerId, resourceLease.fencingToken).catch(() => undefined);
+            }
             activeTasks.delete(taskId);
             const errMessage = err instanceof Error ? err.message : String(err);
             node.state = 'failed';
@@ -657,13 +1055,52 @@ export class JobOrchestrator {
 
           if (!assignment) {
             // Placement unavailable right now; wait for free resources
+            if (resourceLease && this.resourceReservations) {
+              await this.resourceReservations.release(resourceLease.leaseId, this.workerId, resourceLease.fencingToken).catch(() => undefined);
+            }
             activeTasks.delete(taskId);
             readyNodes.unshift(node);
             break;
           }
 
+          if (this.resourceReservations && locks && !resourceLease) {
+            const postReq = this.buildReservationRequest(job.id, taskId, locks, assignment.computerId);
+            if (postReq) {
+              try {
+                resourceLease = await this.resourceReservations.acquire(postReq);
+              } catch (err) {
+                if (err instanceof ResourceConflictError) {
+                  await this.cancelExecution(assignment.executionId);
+                  activeTasks.delete(taskId);
+                  readyNodes.unshift(node);
+                  break;
+                }
+                throw err;
+              }
+            }
+          }
+
+          if (resourceLease) {
+            this.publishCoordinationEvent({
+              type: 'resource.acquired',
+              workflowId: job.id,
+              taskId,
+              agentId: assignment.agentId,
+              workerId: this.workerId,
+              fencingToken: resourceLease.fencingToken,
+              payload: {
+                leaseId: resourceLease.leaseId,
+                resourceKeys: resourceLease.resourceKeys,
+                fencingToken: resourceLease.fencingToken,
+              },
+            });
+          }
+
           handle.activeExecutions.set(taskId, assignment.executionId);
           if (taskAbort.signal.aborted) {
+            if (resourceLease && this.resourceReservations) {
+              await this.resourceReservations.release(resourceLease.leaseId, this.workerId, resourceLease.fencingToken).catch(() => undefined);
+            }
             await this.cancelExecution(assignment.executionId);
             handle.activeExecutions.delete(taskId);
             activeTasks.delete(taskId);
@@ -683,6 +1120,41 @@ export class JobOrchestrator {
             agentId: assignment.agentId,
             computerId: assignment.computerId,
             modelId: assignment.modelId,
+          });
+          this.publishCoordinationEvent({
+            type: 'task.started',
+            workflowId: job.id,
+            taskId,
+            agentId: assignment.agentId,
+            workerId: this.workerId,
+            fencingToken: resourceLease?.fencingToken,
+            payload: {
+              jobId,
+              taskId,
+              agentId: assignment.agentId,
+              computerId: assignment.computerId,
+              modelId: assignment.modelId,
+            },
+          });
+
+          const leaseRenewTimer =
+            resourceLease && this.resourceReservations
+              ? setInterval(() => {
+                  void this.resourceReservations!
+                    .renew(resourceLease!.leaseId, this.workerId)
+                    .catch(() => undefined);
+                }, Math.max(25, Math.floor((resourceLease.expiresAt - resourceLease.acquiredAt) / 3)))
+              : undefined;
+          leaseRenewTimer?.unref?.();
+
+          if (this.messageRouter) {
+            this.messageRouter.authorizeAgentWorkflow(assignment.agentId, job.id);
+          }
+          const coordinationClient = this.messageRouter?.createAgentClient({
+            workflowId: job.id,
+            taskId,
+            agentId: assignment.agentId,
+            fencingToken: resourceLease?.fencingToken,
           });
 
           // Run task execution asynchronously
@@ -711,11 +1183,23 @@ export class JobOrchestrator {
                     phase: ev.phase,
                     event: ev,
                   });
+                  this.publishCoordinationEvent({
+                    type: 'task.progress',
+                    workflowId: job.id,
+                    taskId,
+                    agentId: assignment.agentId,
+                    workerId: this.workerId,
+                    fencingToken: resourceLease?.fencingToken,
+                    payload: { jobId, taskId, phase: ev.phase, event: ev },
+                  });
                 },
                 previousOutcomes: new Map(job.graph.nodes.filter(n => node.dependencies.includes(n.id) || (task.contextFrom && task.contextFrom.includes(n.taskId ?? n.id)))
                   .map(n => [n.taskId ?? n.id, { success: n.state === 'completed', result: structuredClone(n.result), error: n.error }])),
                 workspaceMode: task.workspaceMode,
                 mutationRequired: task.mutationRequired,
+                ...(coordinationClient ? { coordination: coordinationClient } : {}),
+                ...(resourceLease ? { fencingToken: resourceLease.fencingToken, resourceLease } : {}),
+                workerId: this.workerId,
                 getSteeringInstruction: () => {
                   const queue = this.steeringQueues.get(taskId);
                   return queue && queue.length > 0 ? queue.shift() : undefined;
@@ -778,6 +1262,23 @@ export class JobOrchestrator {
                   this.emit(jobId, { type: 'task:cancelled', jobId, taskId });
                 }
               } else if (outcome.success) {
+                if (resourceLease && this.resourceReservations) {
+                  try {
+                    await this.resourceReservations.validateFence(
+                      resourceLease.leaseId,
+                      this.workerId,
+                      resourceLease.fencingToken,
+                    );
+                  } catch (fenceErr) {
+                    if (fenceErr instanceof ResourceLeaseExpiredError || fenceErr instanceof StaleFencingTokenError) {
+                      outcome = { success: false, error: fenceErr.message, errorKind: 'protocol' };
+                    } else {
+                      throw fenceErr;
+                    }
+                  }
+                }
+              }
+              if (!handle.orphanedTaskIds.has(taskId) && !taskAbort.signal.aborted && outcome.success) {
                 await this.completeTask(job.id, taskId, outcome.result);
                 this.emit(jobId, {
                   type: 'task:completed',
@@ -787,7 +1288,30 @@ export class JobOrchestrator {
                   filesChanged: outcome.filesChanged,
                   usage: outcome.usage,
                 });
-              } else {
+                this.publishCoordinationEvent({
+                  type: 'task.completed',
+                  workflowId: job.id,
+                  taskId,
+                  agentId: assignment.agentId,
+                  workerId: this.workerId,
+                  fencingToken: resourceLease?.fencingToken,
+                  payload: { jobId, taskId, filesChanged: outcome.filesChanged },
+                });
+                for (const depNode of job.graph.nodes) {
+                  if (depNode.state === 'idle' && depNode.dependencies.includes(taskId)) {
+                    const depTaskId = depNode.taskId ?? depNode.id;
+                    if (this.jobManager.dependenciesSatisfied(job, depTaskId)) {
+                      this.publishCoordinationEvent({
+                        type: 'task.dependency_ready',
+                        workflowId: job.id,
+                        taskId: depTaskId,
+                        workerId: this.workerId,
+                        payload: { jobId, taskId: depTaskId, satisfiedBy: taskId },
+                      });
+                    }
+                  }
+                }
+              } else if (!handle.orphanedTaskIds.has(taskId) && !taskAbort.signal.aborted) {
                 // Prefer the executor's own structured classification when it set one —
                 // falls back to sniffing the free-text error/reasons for executors (or
                 // thrown-exception paths) that don't.
@@ -976,6 +1500,21 @@ export class JobOrchestrator {
                 }
               }
             } finally {
+              if (leaseRenewTimer) clearInterval(leaseRenewTimer);
+              if (resourceLease && this.resourceReservations) {
+                await this.resourceReservations
+                  .release(resourceLease.leaseId, this.workerId, resourceLease.fencingToken)
+                  .catch(() => undefined);
+                this.publishCoordinationEvent({
+                  type: 'resource.released',
+                  workflowId: job.id,
+                  taskId,
+                  agentId: assignment.agentId,
+                  workerId: this.workerId,
+                  fencingToken: resourceLease.fencingToken,
+                  payload: { leaseId: resourceLease.leaseId },
+                });
+              }
               handle.activeExecutions.delete(taskId);
               activeTasks.delete(taskId);
               this.steeringQueues.delete(taskId);

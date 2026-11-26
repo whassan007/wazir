@@ -46,7 +46,7 @@ with sync_playwright() as p:
 
                 # Test arch selector
                 page.select_option("#desktop-arch", "x64")
-                assert "x86_64" in page.locator("#desktop-downloads").inner_text()
+                assert "Linux" in page.locator("#desktop-downloads").inner_text()
                 page.select_option("#desktop-arch", "arm64")
                 assert "Wazir Shell" in page.locator("#desktop-downloads").inner_text()
 

@@ -28,6 +28,7 @@ export interface WorkflowRunCliOptions {
   dryRun?: boolean;
   detach?: boolean;
   json?: boolean;
+  inspect?: boolean;
   approveAll?: boolean;
   originInterface?: WorkflowOriginInterface;
 }
@@ -240,6 +241,18 @@ export async function graphCommand(
   goal: string,
   options: WorkflowRunCliOptions = {},
 ): Promise<WorkflowCommandResult> {
+  const trimmed = goal.trim();
+  if (options.inspect || (trimmed.length > 0 && !/\s/.test(trimmed))) {
+    const { inspectGraphCommand } = await import('./fabricCommands.js');
+    const inspected = await inspectGraphCommand(trimmed, {
+      inspect: Boolean(options.inspect),
+      workspace: options.workspace,
+      json: options.json,
+    });
+    if (inspected.found || options.inspect) {
+      return inspected.result;
+    }
+  }
   return runWorkflowCommand(goal, {
     ...options,
     defaultRequestedMode: 'graph',
@@ -585,6 +598,7 @@ export function registerWorkflowCommands(program: Command): void {
       .option('--verify <cmd...>', 'Independent verification command(s)')
       .option('--dry-run', 'Compile and print the plan without executing targets')
       .option('--detach', 'Start and persist run immediately without waiting for completion')
+      .option('--inspect', 'Inspect an existing job or workflow run DAG without compiling a new workflow')
       .option('-j, --json', 'Output JSON')
       .option('--approve-all', 'Approve policy gates automatically for this operator invocation')
       .action(async (goal: string, opts) => {

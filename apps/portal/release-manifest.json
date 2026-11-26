@@ -1,9 +1,11 @@
 {
   "name": "Wazir AI OS",
-  "version": "0.4.1",
-  "releasedAt": "2026-11-21T23:31:45.224Z",
+  "version": "0.4.2",
+  "sourceCommit": "79a39e65225b02cf6e59903882d4eb631f4b2289",
+  "releasedAt": "2026-11-26T06:45:31.777Z",
   "repository": "https://github.com/whassan007/wazir",
   "checksumsUrl": "/releases/SHA256SUMS.txt",
+  "sbomUrl": "/releases/sbom.cdx.json",
   "bundledModel": {
     "schemaVersion": 1,
     "wazirModelId": "wazir-shell-mini",
@@ -78,70 +80,148 @@
   },
   "artifacts": [
     {
-      "filename": "Wazir-Shell-0.4.1-macos-arm64.tar.gz",
+      "filename": "Wazir-Shell-0.4.2-macos-arm64.tar.gz",
+      "artifactType": "app-bundle",
+      "os": "macos",
       "platform": "macOS Apple Silicon (Wazir Shell.app)",
       "arch": "arm64",
+      "channel": "development",
+      "requirements": "macOS 14+ (Apple Silicon); xattr -cr required for unsigned bundle",
       "sizeBytes": 5390970,
       "sizeHuman": "5.14 MB",
-      "sha256": "521bc3ca693e9e88726a5f61e10b629010572ab64441f215db96da68ec5fee0c",
+      "sha256": "fd13aadbf1eb2b98f28e38bb677e2ed45e0010b166a58dc3b93676fcbee29fe8",
+      "integrity": "sha256",
+      "signingStatus": "unsigned",
       "signing": "Unsigned development build (Apple Developer ID not configured)",
       "license": "AGPL-3.0-only",
-      "url": "/releases/Wazir-Shell-0.4.1-macos-arm64.tar.gz"
+      "url": "/releases/Wazir-Shell-0.4.2-macos-arm64.tar.gz",
+      "installCommand": "tar -xzf Wazir-Shell-0.4.2-macos-arm64.tar.gz -C /Applications && xattr -cr \"/Applications/Wazir Shell.app\"",
+      "verifyCommand": "shasum -a 256 -c SHA256SUMS.txt --ignore-missing",
+      "provenance": {
+        "version": "0.4.2",
+        "sourceCommit": "79a39e65225b02cf6e59903882d4eb631f4b2289",
+        "generatedAt": "2026-11-26T06:45:31.777Z"
+      }
     },
     {
-      "filename": "Wazir-Mission-Control-0.4.1-macos-arm64.tar.gz",
+      "filename": "Wazir-Mission-Control-0.4.2-macos-arm64.tar.gz",
+      "artifactType": "app-bundle",
+      "os": "macos",
       "platform": "macOS Apple Silicon (Mission Control.app)",
       "arch": "arm64",
+      "channel": "development",
+      "requirements": "macOS 14+ (Apple Silicon); Node.js >= 22.13.0 for local API/Web",
       "sizeBytes": 5282103,
       "sizeHuman": "5.04 MB",
-      "sha256": "d7687db9309c8c14290590f5e48d96f5bb9c22ff9877fc230c5d22c22ccf3ffd",
+      "sha256": "89858fc09955fe13eaf6851efff9a08b02a8f5a740d34ce742e1b0e34bcf0133",
+      "integrity": "sha256",
+      "signingStatus": "unsigned",
       "signing": "Unsigned development build (Apple Developer ID not configured)",
       "license": "AGPL-3.0-only",
-      "url": "/releases/Wazir-Mission-Control-0.4.1-macos-arm64.tar.gz"
+      "url": "/releases/Wazir-Mission-Control-0.4.2-macos-arm64.tar.gz",
+      "installCommand": "tar -xzf Wazir-Mission-Control-0.4.2-macos-arm64.tar.gz -C /Applications && xattr -cr \"/Applications/Wazir Mission Control.app\"",
+      "verifyCommand": "shasum -a 256 -c SHA256SUMS.txt --ignore-missing",
+      "provenance": {
+        "version": "0.4.2",
+        "sourceCommit": "79a39e65225b02cf6e59903882d4eb631f4b2289",
+        "generatedAt": "2026-11-26T06:45:31.777Z"
+      }
     },
     {
-      "filename": "wazir-cli-0.4.1-any.tar.gz",
+      "filename": "wazir-cli-0.4.2-any.tar.gz",
+      "artifactType": "cli-archive",
+      "os": "universal",
       "platform": "Universal CLI (macOS / Linux / Termux ARM64)",
       "arch": "x86_64 / arm64",
-      "sizeBytes": 3769915,
-      "sizeHuman": "3.60 MB",
-      "sha256": "3e1739956e91426d3cfd81de3eada2d9c58e4ca7e7521192a78e4d4e62a688b1",
-      "signing": "SHA-256 verified bundle",
+      "channel": "preview",
+      "requirements": "Node.js >= 22.13.0",
+      "sizeBytes": 3817000,
+      "sizeHuman": "3.64 MB",
+      "sha256": "e026e0ce0f4e0cd1f815f4e8e0c72ef5e7dbf576a58f3ea7099e592574cc7ce0",
+      "integrity": "sha256",
+      "signingStatus": "unsigned",
+      "signing": "Unsigned archive (SHA-256 integrity checksum only)",
       "license": "AGPL-3.0-only",
-      "url": "/releases/wazir-cli-0.4.1-any.tar.gz"
+      "url": "/releases/wazir-cli-0.4.2-any.tar.gz",
+      "installCommand": "tar -xzf wazir-cli-0.4.2-any.tar.gz && node bin/wa.js about && node bin/wa.js doctor",
+      "verifyCommand": "shasum -a 256 -c SHA256SUMS.txt --ignore-missing",
+      "provenance": {
+        "version": "0.4.2",
+        "sourceCommit": "79a39e65225b02cf6e59903882d4eb631f4b2289",
+        "generatedAt": "2026-11-26T06:45:31.777Z"
+      }
     },
     {
-      "filename": "wazir_0.4.1_all.deb",
+      "filename": "wazir_0.4.2_all.deb",
+      "artifactType": "deb",
+      "os": "linux",
       "platform": "Debian / Ubuntu (.deb)",
       "arch": "all (x86_64 / arm64)",
-      "sizeBytes": 2702612,
-      "sizeHuman": "2.58 MB",
-      "sha256": "02607e8ff347d29611bd5af6d8288de56ae1371f006e2bdce9e7b0c96aa385ff",
-      "signing": "SHA-256 verified (built on Ubuntu 24.04 aarch64)",
+      "channel": "preview",
+      "requirements": "Ubuntu 24.04+ / Debian 12+, nodejs >= 22.13.0",
+      "sizeBytes": 96,
+      "sizeHuman": "0.00 MB",
+      "sha256": "c0d3e20ee7653498b0e3a3ddf9694de72118eafccb8d0501c644e9acb0440d4f",
+      "integrity": "sha256",
+      "signingStatus": "unsigned",
+      "signing": "Unsigned .deb package (SHA-256 integrity checksum only)",
       "license": "AGPL-3.0-only",
-      "url": "/releases/wazir_0.4.1_all.deb"
+      "url": "/releases/wazir_0.4.2_all.deb",
+      "installCommand": "sudo dpkg -i wazir_0.4.2_all.deb && wa about && wa doctor",
+      "verifyCommand": "sha256sum -c SHA256SUMS.txt --ignore-missing",
+      "provenance": {
+        "version": "0.4.2",
+        "sourceCommit": "79a39e65225b02cf6e59903882d4eb631f4b2289",
+        "generatedAt": "2026-11-26T06:45:31.777Z"
+      }
     },
     {
-      "filename": "wazir-0.4.1.tar.gz",
+      "filename": "wazir-0.4.2.tar.gz",
+      "artifactType": "source-tarball",
+      "os": "linux",
       "platform": "Linux Source Tarball & RPM Spec",
       "arch": "x86_64 / arm64",
-      "sizeBytes": 3786280,
-      "sizeHuman": "3.61 MB",
-      "sha256": "a5863a179e2407d84e09be8b01708f5f49eaa99bd87dc910eec65181dccdb598",
-      "signing": "SHA-256 verified",
+      "channel": "preview",
+      "requirements": "Fedora / RHEL, rpmbuild, nodejs >= 22.13.0",
+      "sizeBytes": 3833482,
+      "sizeHuman": "3.66 MB",
+      "sha256": "d4e4c7ea92cde6b3f6c0cc1c924dffa6b087b47fea595ee9dfcc41d2ce99d114",
+      "integrity": "sha256",
+      "signingStatus": "unsigned",
+      "signing": "Unsigned source tarball (SHA-256 integrity checksum only)",
       "license": "AGPL-3.0-only",
-      "url": "/releases/wazir-0.4.1.tar.gz"
+      "url": "/releases/wazir-0.4.2.tar.gz",
+      "installCommand": "rpmbuild -tb wazir-0.4.2.tar.gz",
+      "verifyCommand": "sha256sum -c SHA256SUMS.txt --ignore-missing",
+      "provenance": {
+        "version": "0.4.2",
+        "sourceCommit": "79a39e65225b02cf6e59903882d4eb631f4b2289",
+        "generatedAt": "2026-11-26T06:45:31.777Z"
+      }
     },
     {
-      "filename": "wazir-mobile-0.4.1-android-debug.apk",
+      "filename": "wazir-mobile-0.4.2-android-debug.apk",
+      "artifactType": "apk",
+      "os": "android",
       "platform": "GrapheneOS / Android Companion (APK)",
       "arch": "arm64-v8a / universal",
+      "channel": "development",
+      "requirements": "Android 8.0+ / GrapheneOS (API 26-35), zero root",
       "sizeBytes": 22517141,
       "sizeHuman": "21.47 MB",
       "sha256": "7c36492117c9284733eb595a125a89eff23a92662415d5cd8253dc48b25e87b1",
-      "signing": "Debug key (unsigned release)",
+      "integrity": "sha256",
+      "signingStatus": "debug-signed",
+      "signing": "Debug-key signed (development evaluation only; not Play/release signed)",
       "license": "AGPL-3.0-only",
-      "url": "/releases/wazir-mobile-0.4.1-android-debug.apk"
+      "url": "/releases/wazir-mobile-0.4.2-android-debug.apk",
+      "installCommand": "adb install -r wazir-mobile-0.4.2-android-debug.apk",
+      "verifyCommand": "sha256sum -c SHA256SUMS.txt --ignore-missing",
+      "provenance": {
+        "version": "0.4.2",
+        "sourceCommit": "79a39e65225b02cf6e59903882d4eb631f4b2289",
+        "generatedAt": "2026-11-26T06:45:31.777Z"
+      }
     }
   ]
 }

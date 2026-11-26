@@ -5,6 +5,7 @@ import type { PolicyDecision } from './policy.js';
 import type { ExecutionRecord } from './execution.js';
 import type { AgentErrorKind } from './agent.js';
 import type { PromptBreakdown } from './context.js';
+import type { AgentMessagingClient, ResourceLease } from './coordination.js';
 
 export type JobStatus =
   | 'pending'
@@ -36,6 +37,19 @@ export interface JobGraph {
   edges: TaskGraphEdge[];
 }
 
+export interface TaskResourceLocks {
+  workspacePaths?: Array<{ path: string; mode: 'read' | 'write' }>;
+  exclusiveResources?: string[];
+  gitRepos?: Array<{ repoPath: string; mode?: 'read' | 'write' }>;
+  worktrees?: Array<{ worktreePath: string; mode?: 'read' | 'write' }>;
+  gpuSlots?: Array<{ computerId: string; gpuId?: string; gpuMemoryGB?: number }>;
+  modelSlots?: Array<{ runtimeId: string; modelId: string; maxConcurrentSlots?: number }>;
+  computeBudgets?: Array<{ computerId: string; cpuCores?: number; memoryGB?: number }>;
+  cpuCores?: number;
+  memoryGB?: number;
+  gpuMemoryGB?: number;
+}
+
 export interface JobNode {
   id: string;
   parentId?: string;
@@ -43,6 +57,8 @@ export interface JobNode {
   taskId?: string;
   agentId?: string;
   requirements?: TaskRequirements;
+  resourceLocks?: TaskResourceLocks;
+  metadata?: Record<string, unknown>;
   state: AgentState;
   dependencies: string[];
   children: string[];
@@ -209,6 +225,10 @@ export interface JobTaskExecutionContext {
   workspaceMode?: WorkspaceMode;
   mutationRequired?: boolean;
   previousOutcomes?: Map<string, JobTaskOutcome>;
+  coordination?: AgentMessagingClient;
+  fencingToken?: number;
+  resourceLease?: ResourceLease;
+  workerId?: string;
 }
 
 export interface SupervisorDecision {

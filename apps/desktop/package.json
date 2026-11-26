@@ -1,6 +1,6 @@
 {
   "name": "@wazir/desktop",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "license": "AGPL-3.0-only",
   "private": true,
   "description": "Wazir Desktop — native shell around the Wazir API and web dashboard",
@@ -10,7 +10,7 @@
   },
   "scripts": {
     "dev": "tauri dev",
-    "build": "node -e \"const { spawnSync } = require('node:child_process'); if (process.platform === 'linux' && spawnSync('pkg-config', ['--exists', 'dbus-1']).status !== 0) { console.log('[@wazir/desktop] Skipping native Tauri build on headless Linux (dbus-1.pc not installed)'); process.exit(0); } const res = spawnSync('npx', ['tauri', 'build', '--no-bundle'], { stdio: 'inherit', shell: true }); process.exit(res.status ?? 0);\"",
+    "build": "node -e \"const { spawnSync } = require('node:child_process'); if (process.platform === 'linux' && spawnSync('pkg-config', ['--exists', 'dbus-1']).status !== 0) { if (process.env.WAZIR_SKIP_DESKTOP_NATIVE_BUILD === '1') { console.log('[@wazir/desktop] Skipping native Tauri build on headless Linux (WAZIR_SKIP_DESKTOP_NATIVE_BUILD=1)'); process.exit(0); } console.error('[@wazir/desktop] ERROR: native Tauri build requires dbus-1.pc and webkit2gtk on Linux'); process.exit(1); } const res = spawnSync('npx', ['--no-install', 'tauri', 'build', '--no-bundle'], { stdio: 'inherit', shell: true }); process.exit(res.status ?? 1);\"",
     "build:desktop": "tauri build --no-bundle"
   },
   "devDependencies": {

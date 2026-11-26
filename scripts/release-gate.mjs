@@ -5,7 +5,8 @@
 // Generates automated release validation matrix across platforms & architectures.
 // ==============================================================================
 
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -44,8 +45,34 @@ const TARGET_PLATFORMS = [
   { platform: 'macOS', architecture: 'arm64', id: 'darwin-arm64', required: true },
   { platform: 'macOS', architecture: 'x64', id: 'darwin-x64', required: true },
   { platform: 'Windows', architecture: 'x64', id: 'win32-x64', required: true },
-  { platform: 'Windows', architecture: 'arm64', id: 'win32-arm64', required: false, unsupported: true },
+  { platform: 'Windows', architecture: 'arm64', id: 'win32-arm64', required: false, experimental: true },
 ];
+
+export function getExpectedSourceIdentity() {
+  let version = 'unknown';
+  try {
+    version = JSON.parse(readFileSync(path.join(rootDir, 'package.json'), 'utf8')).version || 'unknown';
+  } catch { /* ignore */ }
+  let commit = 'unknown';
+  try {
+    commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: rootDir, encoding: 'utf8' }).trim();
+  } catch { /* ignore */ }
+  let bundleSha256 = null;
+  const waPath = path.join(rootDir, 'bin/wa.js');
+  if (existsSync(waPath)) {
+    bundleSha256 = createHash('sha256').update(readFileSync(waPath)).digest('hex');
+  }
+  return { version, commit, bundleSha256 };
+}
+
+export function validateCachedEvidence(cached, expected, targetId) {
+  if (!cached || typeof cached !== 'object') return false;
+  if (expected.version && expected.version !== 'unknown' && cached.version !== expected.version) return false;
+  if (expected.commit && expected.commit !== 'unknown' && cached.commit !== expected.commit) return false;
+  if (targetId && cached.hostId && cached.hostId !== targetId) return false;
+  if (expected.bundleSha256 && cached.bundleSha256 && cached.bundleSha256 !== expected.bundleSha256) return false;
+  return true;
+}
 
 function getHostPlatformId() {
   const plat = process.platform;
@@ -171,16 +198,24 @@ function testHostPlatform() {
   };
 }
 
-function generateReport() {
+function generateReport(verifyOnly = false) {
   const hostId = getHostPlatformId();
-  const hostEvaluation = testHostPlatform();
+  const expected = getExpectedSourceIdentity();
+  const hostEvaluation = verifyOnly
+    ? null
+    : {
+        ...expected,
+        hostId,
+        generatedAt: new Date().toISOString(),
+        ...testHostPlatform(),
+      };
 
   // Load cached multi-platform matrix results if available (e.g. from CI artifacts)
   const matrixDir = path.join(rootDir, 'dist', 'release-gate');
   const results = [];
 
   for (const target of TARGET_PLATFORMS) {
-    if (target.id === hostId) {
+    if (!verifyOnly && target.id === hostId && hostEvaluation) {
       results.push({
         Platform: target.platform,
         Architecture: target.architecture,
@@ -193,12 +228,16 @@ function generateReport() {
     if (existsSync(artifactFile)) {
       try {
         const cached = JSON.parse(readFileSync(artifactFile, 'utf8'));
-        results.push({
-          Platform: target.platform,
-          Architecture: target.architecture,
-          ...normalizeEvaluation(cached),
-        });
-        continue;
+        if (validateCachedEvidence(cached, expected, target.id)) {
+          results.push({
+            Platform: target.platform,
+            Architecture: target.architecture,
+            ...normalizeEvaluation(cached),
+          });
+          continue;
+        } else {
+          console.warn(`  [WARN] Ignoring stale/mismatched cached evidence for ${target.id}`);
+        }
       } catch (e) {
         // fall back to default
       }
@@ -236,14 +275,16 @@ function generateReport() {
   }
 
   // Save current host results for aggregation
-  if (!existsSync(matrixDir)) {
-    mkdirSync(matrixDir, { recursive: true });
+  if (!verifyOnly && hostEvaluation) {
+    if (!existsSync(matrixDir)) {
+      mkdirSync(matrixDir, { recursive: true });
+    }
+    writeFileSync(
+      path.join(matrixDir, `${hostId}.json`),
+      JSON.stringify(hostEvaluation, null, 2),
+      'utf8'
+    );
   }
-  writeFileSync(
-    path.join(matrixDir, `${hostId}.json`),
-    JSON.stringify(hostEvaluation, null, 2),
-    'utf8'
-  );
 
   return results;
 }
@@ -287,7 +328,9 @@ async function main() {
   console.log('                 WAZIR AUTOMATED RELEASE VALIDATION GATE');
   console.log('==============================================================================\n');
 
-  const results = generateReport();
+  const verifyOnly = process.argv.includes('--verify-only');
+  const strict = process.argv.includes('--strict');
+  const results = generateReport(verifyOnly);
   const table = formatMarkdownTable(results);
 
   console.log('\n' + table + '\n');
@@ -297,14 +340,13 @@ async function main() {
   console.log(`✓ Release gate report written to ${reportPath}\n`);
 
   // Release Gate policy check:
-  // Current host MUST be PASS.
+  // Current host MUST be PASS (or all required platforms when --strict).
   const hostId = getHostPlatformId();
   const hostTarget = TARGET_PLATFORMS.find((target) => target.id === hostId);
   const hostRow = hostTarget && results.find((r) => r.Platform === hostTarget.platform && r.Architecture === hostTarget.architecture);
   
-  const strict = process.argv.includes('--strict');
   const blocking = blockingPlatforms(results, hostId, strict);
-  if (!hostRow || blocking.length > 0) {
+  if ((!verifyOnly && !hostRow) || blocking.length > 0) {
     console.error(`✗ RELEASE BLOCKED: Missing or unsuccessful quality gates: ${blocking.map((t) => t.id).join(', ') || hostId}`);
     process.exitCode = 1;
     return;

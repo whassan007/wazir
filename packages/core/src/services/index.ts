@@ -390,6 +390,53 @@ export type {
   AllocatedWorkloadTarget,
 } from './workloadDistributor.js';
 export * from './harnessAssembler.js';
+export * from './themeService.js';
+export * from './userCommandService.js';
 export * from './shellClassifier.js';
 export * from './fastOrchestrator.js';
 export * from './liquidShellOrchestrator.js';
+export {
+  CoordinationFabric,
+  createCoordinationFabric,
+  validateCoordinationEnvelope,
+  isCompatibleSchemaVersion,
+  NatsWireTransport,
+} from './coordinationFabric.js';
+export type {
+  CoordinationFabricOptions,
+  CoordinationFlushResult,
+  NatsWireTransportOptions,
+} from './coordinationFabric.js';
+export {
+  MessageRouter,
+  createMessageRouter,
+  MessageAuthorizationError,
+  MessageLoopError,
+  MessageReplayError,
+} from './messageRouter.js';
+export type {
+  MessageRouterOptions,
+  WorkflowAuthorizationOptions,
+  RouteMessageInput,
+  ReceiveInboxOptions,
+  NackInboxOptions,
+  AgentClientOptions,
+} from './messageRouter.js';
+export {
+  ResourceReservationManager,
+  createResourceReservationManager,
+  ResourceConflictError,
+  StaleFencingTokenError,
+  ResourceLeaseExpiredError,
+} from './resourceReservationManager.js';
+export type {
+  GpuSlotReservation,
+  ModelSlotReservation,
+  ComputeBudgetReservation,
+  GitRepoReservation,
+  WorktreeReservation,
+  WorkspacePathReservation,
+  ReservationRequest,
+  ComputeCapacity,
+  ResourceReservationManagerOptions,
+} from './resourceReservationManager.js';

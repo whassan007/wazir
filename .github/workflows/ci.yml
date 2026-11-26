@@ -83,6 +83,14 @@ jobs:
       - name: Run Automated Release Validation Gate
         run: npm run release:gate
 
+      - name: Run release integrity unit tests (node:test)
+        run: node --test tests/release/release-integrity.test.mjs
+
+      - name: Run Tauri Rust unit tests
+        run: |
+          cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+          cargo test --manifest-path apps/shell/src-tauri/Cargo.toml
+
       # Platform Installation and CLI Smoke Test
       - name: Test Native Unix Installation (Linux / macOS)
         if: runner.os != 'Windows'

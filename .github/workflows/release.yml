@@ -71,6 +71,12 @@ jobs:
       - run: npm run release:verify
       - run: npm test
       - run: npm run release:gate
+      - name: Upload release gate evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-gate-${{ runner.os }}-${{ runner.arch }}
+          path: dist/release-gate/*.json
+          if-no-files-found: error
       - name: Release integrity unit tests
         run: node --test tests/release/release-integrity.test.mjs
       - name: API startup and health smoke
@@ -108,6 +114,12 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run release:gate
+      - name: Upload release gate evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-gate-${{ runner.os }}-${{ runner.arch }}
+          path: dist/release-gate/*.json
+          if-no-files-found: error
       - name: Release integrity unit tests
         run: node --test tests/release/release-integrity.test.mjs
 
@@ -191,6 +203,16 @@ jobs:
         with:
           path: all-artifacts
 
+      - name: Download all release gate evidence
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-gate-*
+          path: dist/release-gate
+          merge-multiple: true
+
+      - name: Verify strict multi-platform release gate
+        run: node scripts/release-gate.mjs --strict --verify-only
+
       - name: Consolidate artifacts and generate unified SHA256SUMS
         run: |
           mkdir -p release-dist
@@ -214,9 +236,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.verify.outputs.tag }}
-          draft: false
+          draft: ${{ inputs.publish_draft == true || inputs.publish_draft == 'true' }}
           prerelease: ${{ contains(needs.verify.outputs.version, '-') }}
-          make_latest: ${{ !contains(needs.verify.outputs.version, '-') }}
+          make_latest: ${{ !contains(needs.verify.outputs.version, '-') && !(inputs.publish_draft == true || inputs.publish_draft == 'true') }}
           files: release-dist/*
           generate_release_notes: true
           name: Wazir ${{ needs.verify.outputs.tag }}
@@ -226,7 +248,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           extra_flags=()
-          if [[ "${{ contains(needs.verify.outputs.version, '-') }}" != "true" ]]; then
+          if [[ "${{ contains(needs.verify.outputs.version, '-') }}" != "true" && "${{ inputs.publish_draft }}" != "true" ]]; then
             extra_flags+=(--stable --latest)
           fi
           node scripts/release-integrity.mjs \

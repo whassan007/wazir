@@ -16,6 +16,7 @@ import type {
   ExecutionPreferences,
   ExecutionRecord,
   WorkspaceMode,
+  TaskResourceLocks,
 } from '../types/index.js';
 import type { ExecutionEngine } from './executionEngine.js';
 import { findUnknownOutcomeToolCall } from './executionRecovery.js';
@@ -436,6 +437,11 @@ export class JobManager {
         task.status = 'cancelled';
       }
     }
+    for (const node of job.graph.nodes) {
+      if (node.state !== 'completed' && node.state !== 'failed' && node.state !== 'cancelled') {
+        node.state = 'cancelled';
+      }
+    }
     await this.flush(job);
   }
 
@@ -665,11 +671,15 @@ export class JobManager {
       job.tasks.push(task);
       createdTasks.push(task);
 
+      const resourceLocks = extractNodeResourceLocks(input);
+      const metadata = extractNodeMetadata(input);
       const node: JobNode = {
         id: taskId,
         type: input.type ?? 'task',
         taskId,
         agentId: input.agentId,
+        ...(resourceLocks ? { resourceLocks } : {}),
+        ...(metadata ? { metadata } : {}),
         state: 'idle',
         dependencies: input.dependencies ?? [],
         children: [],
@@ -678,7 +688,8 @@ export class JobManager {
       job.graph.nodes.push(node);
 
       for (const dep of input.dependencies ?? []) {
-        job.graph.edges.push({ from: dep, to: taskId });
+        const condition = input.dependencyConditions?.[dep];
+        job.graph.edges.push(condition ? { from: dep, to: taskId, condition } : { from: dep, to: taskId });
         const parentNode = job.graph.nodes.find((n) => n.id === dep || n.taskId === dep);
         if (parentNode && !parentNode.children.includes(taskId)) {
           parentNode.children.push(taskId);
@@ -766,12 +777,16 @@ export class JobManager {
     for (let i = 0; i < tasks.length; i++) {
       const taskInput = tasks[i];
       const nodeId = taskInput.task.id ?? `task-${i}`;
+      const resourceLocks = extractNodeResourceLocks(taskInput);
+      const metadata = extractNodeMetadata(taskInput);
 
       const node: JobNode = {
         id: nodeId,
         type: taskInput.type ?? 'task',
         taskId: taskInput.task.id,
         agentId: taskInput.agentId,
+        ...(resourceLocks ? { resourceLocks } : {}),
+        ...(metadata ? { metadata } : {}),
         state: 'idle',
         dependencies: taskInput.dependencies ?? [],
         children: [],
@@ -780,7 +795,8 @@ export class JobManager {
       nodes.push(node);
 
       for (const dep of taskInput.dependencies ?? []) {
-        edges.push({ from: dep, to: nodeId });
+        const condition = taskInput.dependencyConditions?.[dep];
+        edges.push(condition ? { from: dep, to: nodeId, condition } : { from: dep, to: nodeId });
         const parentNode = nodes.find((n) => n.id === dep);
         if (parentNode && !parentNode.children.includes(nodeId)) {
           parentNode.children.push(nodeId);
@@ -791,18 +807,86 @@ export class JobManager {
     return { nodes, edges };
   }
 
+  private findIncomingEdge(job: Job, from: string, node: JobNode, taskId: string): TaskGraphEdge | undefined {
+    return job.graph.edges.find(
+      (e) =>
+        e.from === from &&
+        (e.to === node.id || e.to === taskId || (node.taskId !== undefined && e.to === node.taskId)),
+    );
+  }
+
   dependenciesSatisfied(job: Job, taskId: string): boolean {
     const node = job.graph.nodes.find((n) => n.taskId === taskId || n.id === taskId);
     if (!node) return true;
 
     for (const dep of node.dependencies) {
       const depNode = job.graph.nodes.find((n) => n.id === dep || n.taskId === dep);
-      if (depNode && depNode.state !== 'completed') {
-        return false;
+      const depTask = job.tasks.find((t) => t.id === dep);
+      const condition = this.findIncomingEdge(job, dep, node, taskId)?.condition ?? 'success';
+
+      if (condition === 'success') {
+        if (depNode && depNode.state !== 'completed') {
+          return false;
+        }
+        if (!depNode && depTask && depTask.status !== 'completed') {
+          return false;
+        }
+      } else if (condition === 'failure') {
+        if (!(depNode?.state === 'failed' || depTask?.status === 'failed')) {
+          return false;
+        }
+      } else {
+        // condition === 'always'
+        if (depNode) {
+          if (depNode.state !== 'completed' && depNode.state !== 'failed' && depNode.state !== 'cancelled') {
+            return false;
+          }
+        } else if (
+          depTask &&
+          depTask.status !== 'completed' &&
+          depTask.status !== 'failed' &&
+          depTask.status !== 'cancelled'
+        ) {
+          return false;
+        }
       }
     }
 
     return true;
+  }
+
+  hasSkippedConditionalDependency(job: Job, taskId: string, visited: Set<string> = new Set()): boolean {
+    if (visited.has(taskId)) return false;
+    visited.add(taskId);
+
+    const node = job.graph.nodes.find((n) => n.taskId === taskId || n.id === taskId);
+    if (!node) return false;
+
+    for (const dep of node.dependencies) {
+      const depNode = job.graph.nodes.find((n) => n.id === dep || n.taskId === dep);
+      const depTask = job.tasks.find((t) => t.id === dep);
+      const condition = this.findIncomingEdge(job, dep, node, taskId)?.condition ?? 'success';
+
+      if (condition === 'failure') {
+        if (
+          depNode?.state === 'completed' ||
+          depNode?.state === 'cancelled' ||
+          depTask?.status === 'completed' ||
+          depTask?.status === 'cancelled'
+        ) {
+          return true;
+        }
+      } else if (condition === 'success') {
+        if (
+          (depNode?.state === 'cancelled' || depTask?.status === 'cancelled') &&
+          this.hasSkippedConditionalDependency(job, dep, visited)
+        ) {
+          return true;
+        }
+      }
+    }
+
+    return false;
   }
 
   hasFailedDependency(job: Job, taskId: string): boolean {
@@ -812,11 +896,19 @@ export class JobManager {
     for (const dep of node.dependencies) {
       const depNode = job.graph.nodes.find((n) => n.id === dep || n.taskId === dep);
       const depTask = job.tasks.find((t) => t.id === dep);
-      if (
-        (depNode && (depNode.state === 'failed' || depNode.state === 'cancelled')) ||
-        (depTask && (depTask.status === 'failed' || depTask.status === 'cancelled'))
-      ) {
+      const condition = this.findIncomingEdge(job, dep, node, taskId)?.condition ?? 'success';
+
+      if (condition === 'always' || condition === 'failure') {
+        continue;
+      }
+
+      if (depNode?.state === 'failed' || depTask?.status === 'failed') {
         return true;
+      }
+      if (depNode?.state === 'cancelled' || depTask?.status === 'cancelled') {
+        if (!this.hasSkippedConditionalDependency(job, dep)) {
+          return true;
+        }
       }
     }
 
@@ -866,6 +958,58 @@ export class JobManager {
   }
 }
 
+function extractNodeResourceLocks(input: JobTaskInput): TaskResourceLocks | undefined {
+  const taskLocks = input.task.resourceLocks;
+  const topLocks = input.resourceLocks;
+  const workspacePaths = topLocks?.workspacePaths ?? taskLocks?.workspacePaths ?? input.task.workspacePaths;
+  const exclusiveResources =
+    topLocks?.exclusiveResources ?? taskLocks?.exclusiveResources ?? input.task.exclusiveResources;
+  const gitRepos = topLocks?.gitRepos ?? taskLocks?.gitRepos;
+  const worktrees = topLocks?.worktrees ?? taskLocks?.worktrees;
+  const gpuSlots = topLocks?.gpuSlots ?? taskLocks?.gpuSlots;
+  const modelSlots = topLocks?.modelSlots ?? taskLocks?.modelSlots;
+  const computeBudgets = topLocks?.computeBudgets ?? taskLocks?.computeBudgets;
+  const cpuCores = topLocks?.cpuCores ?? taskLocks?.cpuCores;
+  const memoryGB = topLocks?.memoryGB ?? taskLocks?.memoryGB;
+  const gpuMemoryGB = topLocks?.gpuMemoryGB ?? taskLocks?.gpuMemoryGB;
+
+  if (
+    workspacePaths === undefined &&
+    exclusiveResources === undefined &&
+    gitRepos === undefined &&
+    worktrees === undefined &&
+    gpuSlots === undefined &&
+    modelSlots === undefined &&
+    computeBudgets === undefined &&
+    cpuCores === undefined &&
+    memoryGB === undefined &&
+    gpuMemoryGB === undefined
+  ) {
+    return undefined;
+  }
+
+  return {
+    ...(workspacePaths !== undefined ? { workspacePaths } : {}),
+    ...(exclusiveResources !== undefined ? { exclusiveResources } : {}),
+    ...(gitRepos !== undefined ? { gitRepos } : {}),
+    ...(worktrees !== undefined ? { worktrees } : {}),
+    ...(gpuSlots !== undefined ? { gpuSlots } : {}),
+    ...(modelSlots !== undefined ? { modelSlots } : {}),
+    ...(computeBudgets !== undefined ? { computeBudgets } : {}),
+    ...(cpuCores !== undefined ? { cpuCores } : {}),
+    ...(memoryGB !== undefined ? { memoryGB } : {}),
+    ...(gpuMemoryGB !== undefined ? { gpuMemoryGB } : {}),
+  };
+}
+
+function extractNodeMetadata(input: JobTaskInput): Record<string, unknown> | undefined {
+  if (!input.task.metadata && !input.metadata) return undefined;
+  return {
+    ...(input.task.metadata ?? {}),
+    ...(input.metadata ?? {}),
+  };
+}
+
 export interface JobTaskInput {
   task: {
     id?: string;
@@ -887,10 +1031,17 @@ export interface JobTaskInput {
     /** Pins this task to a specific model/computer/runtime/agent instead of letting
      *  the scheduler auto-route it — e.g. wa run --model, or /model in wa chat. */
     execution?: Partial<ExecutionPreferences>;
+    resourceLocks?: TaskResourceLocks;
+    workspacePaths?: Array<{ path: string; mode: 'read' | 'write' }>;
+    exclusiveResources?: string[];
+    metadata?: Record<string, unknown>;
   };
   agentId?: string;
   dependencies?: string[];
+  dependencyConditions?: Record<string, 'success' | 'failure' | 'always'>;
   type?: JobNode['type'];
+  resourceLocks?: TaskResourceLocks;
+  metadata?: Record<string, unknown>;
 }
 
 export function createJobManager(options: JobManagerOptions = {}): JobManager {

@@ -17,13 +17,21 @@ import {
   discoverOptionalShellTools,
   evaluateSafeArithmetic,
   executeLiquidShellRequest,
+  expandUserCustomCommand,
   formatLocalDate,
   formatLocalTime,
   formatLocalTimeAndDate,
+  getUserCustomCommand,
   isLiquidShellEligibleRequest,
   isPathInside,
+  listUserCustomCommands,
+  listWazirThemes,
+  readActiveWazirTheme,
+  removeUserCustomCommand,
   resolveEmbeddedAssetLocations,
+  saveUserCustomCommand,
   terminateProcessTree,
+  writeActiveWazirTheme,
   type ExecutionPhase,
   type OptionalShellToolStatus,
   type RoutingDecision,
@@ -233,8 +241,11 @@ export function completeShellInput(
       ['loop', 'graph', 'goal', 'inspect', 'pause', 'resume', 'stop'].includes(cmd) ? `${cmd} ` : cmd,
     ),
     'cd ', 'pwd', 'export ', 'unset ', 'alias ', 'unalias ', 'tools', 'exit', 'quit',
+    'theme', 'commands', 'menu',
     '/mode auto', '/mode shell', '/mode ai',
     '/model ', '/permissions ask', '/permissions auto', '/permissions read-only',
+    '/theme', '/commands', '/menu',
+    ...listUserCustomCommands({ wazirHome: state.env.WAZIR_HOME, env: state.env }).map((c) => c.name),
     ...Object.keys(state.aliases),
   ];
 
@@ -789,6 +800,63 @@ export async function executeShellLine(
           return builtinCode;
         }
         break;
+      }
+
+      case 'theme': {
+        const parts = (decision.tier0Payload ?? '').trim().split(/\s+/).filter(Boolean);
+        const action = parts[0]?.toLowerCase() ?? 'current';
+        const wantJson = parts.includes('--json') || parts.includes('-j');
+        if (action === 'list') {
+          const code = await runThemeCli('list', undefined, { json: wantJson, env: state.env });
+          state.lastExitCode = code;
+          recordMetric(0, decision.handler, { status: code === 0 ? 'success' : 'error', workMs: performance.now() - workStart });
+          return code;
+        }
+        if (action === 'set' && parts[1]) {
+          const code = await runThemeCli('set', parts[1], { json: wantJson, env: state.env });
+          state.lastExitCode = code;
+          recordMetric(0, decision.handler, { status: code === 0 ? 'success' : 'error', workMs: performance.now() - workStart });
+          return code;
+        }
+        if (action !== 'current' && !action.startsWith('-')) {
+          const code = await runThemeCli('set', action, { json: wantJson, env: state.env });
+          state.lastExitCode = code;
+          recordMetric(0, decision.handler, { status: code === 0 ? 'success' : 'error', workMs: performance.now() - workStart });
+          return code;
+        }
+        const code = await runThemeCli('current', undefined, { json: wantJson, env: state.env });
+        state.lastExitCode = code;
+        recordMetric(0, decision.handler, { status: code === 0 ? 'success' : 'error', workMs: performance.now() - workStart });
+        return code;
+      }
+
+      case 'commands': {
+        const parts = (decision.tier0Payload ?? '').trim().split(/\s+/).filter(Boolean);
+        const action = parts[0]?.toLowerCase() ?? 'list';
+        const name = parts[1];
+        const rest = parts.slice(2);
+        const code = await runCommandsCli(action, name, rest, { env: state.env });
+        state.lastExitCode = code;
+        recordMetric(0, decision.handler, { status: code === 0 ? 'success' : 'error', workMs: performance.now() - workStart });
+        return code;
+      }
+
+      case 'menu': {
+        const raw = (decision.tier0Payload ?? '').trim();
+        const wantJson = raw.includes('--json') || raw.includes('-j');
+        const code = await runMenuCli({ json: wantJson, filter: raw.replace(/--json|-j/g, '').trim() || undefined, env: state.env });
+        state.lastExitCode = code;
+        recordMetric(0, decision.handler, { status: code === 0 ? 'success' : 'error', workMs: performance.now() - workStart });
+        return code;
+      }
+
+      case 'custom_command': {
+        const expandedCmd = (decision.shellCommand ?? decision.tier0Payload ?? '').trim();
+        if (!expandedCmd) {
+          state.lastExitCode = 1;
+          return 1;
+        }
+        return executeShellLine(`! ${expandedCmd}`, state, onAiRequest, options);
       }
 
       default: {
@@ -2167,6 +2235,257 @@ export async function runFastDebugCli(action: string = 'status'): Promise<number
   return 0;
 }
 
+export async function runThemeCli(
+  action: string = 'current',
+  themeId?: string,
+  options: { json?: boolean; env?: NodeJS.ProcessEnv } = {},
+): Promise<number> {
+  const env = options.env ?? process.env;
+  const wazirHome = env.WAZIR_HOME;
+  const normalized = action.trim().toLowerCase();
+
+  if (normalized === 'list') {
+    const active = readActiveWazirTheme({ wazirHome, env });
+    const themes = listWazirThemes();
+    if (options.json) {
+      console.log(JSON.stringify({ activeThemeId: active.id, themes }, null, 2));
+      return 0;
+    }
+    console.log(`Wazir Themes (active: ${active.id}):`);
+    for (const t of themes) {
+      const marker = t.id === active.id ? '*' : ' ';
+      console.log(`  ${marker} ${t.id.padEnd(14)} ${t.name.padEnd(18)} [${t.mode}]  ${t.description}`);
+    }
+    return 0;
+  }
+
+  if (normalized === 'set' || (normalized !== 'current' && !themeId)) {
+    const targetId = normalized === 'set' ? themeId : action;
+    if (!targetId) {
+      console.error('Usage: wa theme set <theme-id>');
+      return 1;
+    }
+    try {
+      const updated = writeActiveWazirTheme(targetId, { wazirHome, env });
+      if (options.json) {
+        console.log(JSON.stringify({ theme: updated }, null, 2));
+      } else {
+        console.log(`Theme set to '${updated.id}' (${updated.name}, ${updated.mode}).`);
+      }
+      return 0;
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      return 1;
+    }
+  }
+
+  const active = readActiveWazirTheme({ wazirHome, env });
+  if (options.json) {
+    console.log(JSON.stringify({ theme: active }, null, 2));
+  } else {
+    console.log(`Active theme: ${active.id} (${active.name}, ${active.mode})`);
+    console.log(`  accent=${active.tokens.accent}  bg=${active.tokens.bg}  text=${active.tokens.text}`);
+  }
+  return 0;
+}
+
+export async function runCommandsCli(
+  action: string = 'list',
+  name?: string,
+  commandParts: string[] = [],
+  options: { description?: string; mode?: string; json?: boolean; env?: NodeJS.ProcessEnv } = {},
+): Promise<number> {
+  const env = options.env ?? process.env;
+  const wazirHome = env.WAZIR_HOME;
+  const normalized = action.trim().toLowerCase();
+
+  if (normalized === 'list') {
+    const cmds = listUserCustomCommands({ wazirHome, env });
+    if (options.json) {
+      console.log(JSON.stringify({ commands: cmds }, null, 2));
+      return 0;
+    }
+    if (cmds.length === 0) {
+      console.log('No custom commands defined in ~/.wazir/commands/ or ~/.wazir/bin/.');
+      console.log('Add one with: wa commands add <name> "<shell command>"');
+      return 0;
+    }
+    console.log(`Custom Wazir Commands (${cmds.length}):`);
+    for (const c of cmds) {
+      console.log(`  ${c.name.padEnd(18)} [${c.mode ?? 'shell'}, ${c.source ?? 'manifest'}]  ${c.description}`);
+    }
+    return 0;
+  }
+
+  if (normalized === 'add') {
+    const cmdText = commandParts.join(' ').trim();
+    if (!name || !cmdText) {
+      console.error('Usage: wa commands add <name> <command...>');
+      return 1;
+    }
+    try {
+      const saved = saveUserCustomCommand(
+        {
+          name,
+          description: options.description || `Custom command: ${cmdText}`,
+          command: cmdText,
+          mode: options.mode === 'ai' || options.mode === 'workflow' ? options.mode : 'shell',
+        },
+        { wazirHome, env },
+      );
+      if (options.json) {
+        console.log(JSON.stringify({ saved }, null, 2));
+      } else {
+        console.log(`Saved custom command '${saved.name}' -> ${saved.filePath}`);
+      }
+      return 0;
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      return 1;
+    }
+  }
+
+  if (normalized === 'remove' || normalized === 'rm' || normalized === 'delete') {
+    if (!name) {
+      console.error('Usage: wa commands remove <name>');
+      return 1;
+    }
+    try {
+      const removed = removeUserCustomCommand(name, { wazirHome, env });
+      if (options.json) {
+        console.log(JSON.stringify({ name, removed }, null, 2));
+      } else if (removed) {
+        console.log(`Removed custom command '${name}'.`);
+      } else {
+        console.error(`Custom command '${name}' not found.`);
+      }
+      return removed ? 0 : 1;
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      return 1;
+    }
+  }
+
+  if (normalized === 'run') {
+    if (!name) {
+      console.error('Usage: wa commands run <name> [args...]');
+      return 1;
+    }
+    const def = getUserCustomCommand(name, { wazirHome, env });
+    if (!def) {
+      console.error(`Custom command '${name}' not found.`);
+      return 1;
+    }
+    const expanded = expandUserCustomCommand(def, commandParts.join(' '));
+    const shell = process.platform === 'win32' ? 'cmd.exe' : (process.env.SHELL || '/bin/sh');
+    const shellArgs = process.platform === 'win32' ? ['/c', expanded] : ['-c', expanded];
+    try {
+      execFileSync(shell, shellArgs, {
+        cwd: def.cwd || process.cwd(),
+        env: env as NodeJS.ProcessEnv,
+        stdio: 'inherit',
+      });
+      return 0;
+    } catch (err: unknown) {
+      const status = (err as { status?: number })?.status;
+      return typeof status === 'number' ? status : 1;
+    }
+  }
+
+  console.error(`Unknown action '${action}'. Expected: list | add | remove | run`);
+  return 1;
+}
+
+export interface MenuCatalogItem {
+  id: string;
+  category: 'theme' | 'command' | 'mode' | 'system';
+  label: string;
+  description: string;
+  action: string;
+}
+
+export function buildWazirMenuCatalog(options: { env?: NodeJS.ProcessEnv } = {}): MenuCatalogItem[] {
+  const env = options.env ?? process.env;
+  const wazirHome = env.WAZIR_HOME;
+  const items: MenuCatalogItem[] = [];
+
+  for (const t of listWazirThemes()) {
+    items.push({
+      id: `theme:${t.id}`,
+      category: 'theme',
+      label: `Theme: ${t.name}`,
+      description: t.description,
+      action: `wa theme set ${t.id}`,
+    });
+  }
+
+  for (const c of listUserCustomCommands({ wazirHome, env })) {
+    items.push({
+      id: `cmd:${c.name}`,
+      category: 'command',
+      label: `Command: ${c.name}`,
+      description: c.description,
+      action: `wa commands run ${c.name}`,
+    });
+  }
+
+  items.push(
+    { id: 'mode:auto', category: 'mode', label: 'Mode: Auto', description: '4-Tier FastOrchestrator routing', action: '/mode auto' },
+    { id: 'mode:shell', category: 'mode', label: 'Mode: Shell', description: 'Direct OS shell execution', action: '/mode shell' },
+    { id: 'mode:ai', category: 'mode', label: 'Mode: AI', description: 'Route all requests to LLM/Agent', action: '/mode ai' },
+    { id: 'sys:models', category: 'system', label: 'Inspect Models', description: 'List local and fleet models', action: 'wa models' },
+    { id: 'sys:fleet', category: 'system', label: 'Fleet Status', description: 'Show connected compute nodes', action: 'wa fleet status' },
+    { id: 'sys:latency', category: 'system', label: 'Latency Report', description: 'Show FastOrchestrator latency percentiles', action: 'wa latency' },
+  );
+
+  return items;
+}
+
+export async function runMenuCli(options: {
+  filter?: string;
+  run?: string;
+  json?: boolean;
+  env?: NodeJS.ProcessEnv;
+} = {}): Promise<number> {
+  const catalog = buildWazirMenuCatalog({ env: options.env });
+  const filter = options.filter?.trim().toLowerCase();
+  const filtered = filter
+    ? catalog.filter(
+        (item) =>
+          item.id.toLowerCase().includes(filter) ||
+          item.label.toLowerCase().includes(filter) ||
+          item.description.toLowerCase().includes(filter),
+      )
+    : catalog;
+
+  if (options.run) {
+    const target = catalog.find((item) => item.id === options.run);
+    if (!target) {
+      console.error(`Menu action '${options.run}' not found.`);
+      return 1;
+    }
+    if (target.id.startsWith('theme:')) {
+      return runThemeCli('set', target.id.slice('theme:'.length), { json: options.json, env: options.env });
+    }
+    if (target.id.startsWith('cmd:')) {
+      return runCommandsCli('run', target.id.slice('cmd:'.length), [], { json: options.json, env: options.env });
+    }
+    console.log(target.action);
+    return 0;
+  }
+
+  if (options.json) {
+    console.log(JSON.stringify({ items: filtered }, null, 2));
+    return 0;
+  }
+
+  console.log(`Wazir Universal Command Palette (${filtered.length} actions):`);
+  for (const item of filtered) {
+    console.log(`  ${item.id.padEnd(22)} ${item.label.padEnd(28)} ${item.description}`);
+  }
+  return 0;
+}
+
 export function registerShellAndMetaCommands(program: Command, cliVersion?: string): void {
   const effectiveVersion = cliVersion && cliVersion !== '0.3.1' ? cliVersion : resolveAuthoritativePackageVersion();
 
@@ -2205,6 +2524,39 @@ export function registerShellAndMetaCommands(program: Command, cliVersion?: stri
     .description('Inspect or toggle persistent shell routing debug traces (on | off | status)')
     .action(async (stateArg: string = 'status') => {
       process.exitCode = await runFastDebugCli(stateArg);
+    });
+
+  program
+    .command('theme [action] [themeId]')
+    .description('Inspect or switch the coordinated Wazir theme (list | current | set <name>)')
+    .option('-j, --json', 'Output JSON')
+    .action(async (action: string = 'current', themeId: string | undefined, opts: { json?: boolean }) => {
+      process.exitCode = await runThemeCli(action, themeId, opts);
+    });
+
+  program
+    .command('commands [action] [name] [commandParts...]')
+    .description('Manage agent-malleable custom commands in ~/.wazir/commands/ (list | add | remove | run)')
+    .option('-d, --description <desc>', 'Command description')
+    .option('-m, --mode <mode>', 'Execution mode: shell | ai | workflow')
+    .option('-j, --json', 'Output JSON')
+    .action(async (
+      action: string = 'list',
+      name: string | undefined,
+      commandParts: string[] = [],
+      opts: { description?: string; mode?: string; json?: boolean },
+    ) => {
+      process.exitCode = await runCommandsCli(action, name, commandParts, opts);
+    });
+
+  program
+    .command('menu')
+    .description('Open or query the Wazir Universal Command Palette')
+    .option('-f, --filter <query>', 'Filter actions by keyword')
+    .option('-r, --run <actionId>', 'Execute a specific menu action ID')
+    .option('-j, --json', 'Output JSON')
+    .action(async (opts: { filter?: string; run?: string; json?: boolean }) => {
+      process.exitCode = await runMenuCli(opts);
     });
 
   program

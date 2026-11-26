@@ -39,18 +39,22 @@
       <p class="lead">One intelligent shell. Every machine.</p>
       <p class="sub">Run commands, delegate work to AI, and manage execution across your computers. Locally, securely, and with verifiable results.</p>
       <div class="hero-actions">
-        <a id="hero-primary-btn" class="btn primary" href="/releases/Wazir-Shell-0.4.1-macos-arm64.tar.gz" download>
+        <a id="hero-primary-btn" class="btn primary" href="/releases/Wazir-Shell-0.4.2-macos-arm64.tar.gz" download>
           Download for macOS
         </a>
+        <div id="hero-meta" class="muted" style="font-size:12.5px;max-width:680px;"></div>
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:center;">
           <label for="hero-os-select" class="muted" style="font-size:13px;">Platform:</label>
           <select id="hero-os-select" aria-label="Select operating system" class="btn sm" style="border-radius:8px;">
             <option value="macos">macOS (Apple Silicon · Wazir Shell.app)</option>
             <option value="linux-deb">Linux (Ubuntu / Debian · .deb)</option>
             <option value="linux-tar">Linux / Universal CLI (.tar.gz)</option>
+            <option value="windows">Windows 11 (x64 / ARM64 Preview · CLI)</option>
             <option value="android">Android / GrapheneOS (.apk)</option>
+            <option value="ios">iOS (WazirMobile · Xcode Source)</option>
           </select>
         </div>
+        <div id="manifest-error-banner" role="alert" style="display:none;padding:10px 14px;border-radius:10px;border:1px solid var(--warn);background:var(--surface-soft);font-size:13px;max-width:680px;"></div>
         <a href="#get-started" class="muted" style="font-size:14px;">Explore all installation options ↓</a>
       </div>
     </section>
@@ -67,7 +71,7 @@
             <img src="/logo-emblem.svg" alt="Wazir Desktop icon" width="36" height="36" />
             <div>
               <h3 id="card-desktop-title" style="margin:0;">Wazir Desktop</h3>
-              <span class="muted" style="font-size:13px;">macOS &amp; Linux · v<span class="manifest-version">0.4.1</span></span>
+              <span class="muted" style="font-size:13px;">macOS &amp; Linux · v<span class="manifest-version">0.4.2</span></span>
             </div>
           </div>
 
@@ -117,12 +121,16 @@
           <p class="muted" style="margin-top:0;">Start a task anywhere. Let your machines do the work.</p>
 
           <div id="mobile-downloads" style="display:grid;gap:10px;margin-bottom:18px;">
-            <a class="btn primary" href="/releases/wazir-mobile-0.4.1-android-debug.apk" download>
-              Download GrapheneOS / Android APK (v0.4.1)
+            <a id="android-apk-btn" class="btn primary" href="/releases/wazir-mobile-0.4.2-android-debug.apk" download>
+              Download GrapheneOS / Android APK (v0.4.2)
             </a>
             <a class="btn" href="#terminal-install" onclick="selectTermPlatform('termux')">
               Install Termux ARM64 CLI
             </a>
+            <div style="padding:12px;border-radius:10px;background:var(--surface-soft);font-size:13px;">
+              <strong>iOS Companion (<code>WazirMobile</code>)</strong>
+              <div class="muted" style="margin-top:4px;">Swift/SwiftUI app (<code>apps/ios/WazirMobile/</code>, iOS 16+, Keychain + Face ID). Build from source in Xcode; App Store / TestFlight distribution is not yet published.</div>
+            </div>
           </div>
 
           <div style="display:flex;gap:16px;align-items:center;padding:14px;border-radius:12px;background:var(--surface-soft);margin-bottom:14px;">
@@ -277,7 +285,7 @@
 
       <div class="card" style="overflow-x:auto;margin-bottom:20px;">
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:14px;">
-          <strong>Release v<span class="manifest-version">0.4.1</span></strong>
+          <strong>Release v<span class="manifest-version">0.4.2</span></strong>
           <div style="display:flex;gap:10px;flex-wrap:wrap;font-size:13px;">
             <a href="/releases/SHA256SUMS.txt">SHA256SUMS.txt</a>
             <a href="/release-manifest.json">release-manifest.json</a>
@@ -397,20 +405,49 @@ git checkout v0.4.0 &amp;&amp; npm install &amp;&amp; npm run build</pre>
       ? window.location.origin
       : 'https://wazir.wael.bot';
 
+    let manifestData = null;
+
     const HERO_PLATFORMS = {
-      macos: { label: 'Download for macOS', href: '/releases/Wazir-Shell-0.4.1-macos-arm64.tar.gz' },
-      'linux-deb': { label: 'Download for Linux (.deb)', href: '/releases/wazir_0.4.1_all.deb' },
-      'linux-tar': { label: 'Download Universal CLI (.tar.gz)', href: '/releases/wazir-cli-0.4.1-any.tar.gz' },
-      android: { label: 'Download for Android / GrapheneOS', href: '/releases/wazir-mobile-0.4.1-android-debug.apk' },
+      macos: { label: 'Download for macOS (ARM64)', filename: 'Wazir-Shell-0.4.2-macos-arm64.tar.gz', href: '/releases/Wazir-Shell-0.4.2-macos-arm64.tar.gz' },
+      'linux-deb': { label: 'Download for Linux (.deb)', filename: 'wazir_0.4.2_all.deb', href: '/releases/wazir_0.4.2_all.deb' },
+      'linux-tar': { label: 'Download Universal CLI (.tar.gz)', filename: 'wazir-cli-0.4.2-any.tar.gz', href: '/releases/wazir-cli-0.4.2-any.tar.gz' },
+      windows: { label: 'Install on Windows 11 (PowerShell)', filename: null, href: '#terminal-install', termPlat: 'windows' },
+      android: { label: 'Download for Android / GrapheneOS', filename: 'wazir-mobile-0.4.2-android-debug.apk', href: '/releases/wazir-mobile-0.4.2-android-debug.apk' },
+      ios: { label: 'Build iOS Companion in Xcode', filename: null, href: '#get-started' },
     };
 
     function applyHeroPlatform(key) {
       const spec = HERO_PLATFORMS[key] || HERO_PLATFORMS.macos;
       const btn = document.getElementById('hero-primary-btn');
       const sel = document.getElementById('hero-os-select');
+      const meta = document.getElementById('hero-meta');
       if (btn) {
-        btn.textContent = spec.label;
-        btn.href = spec.href;
+        if (!spec.filename) {
+          btn.textContent = spec.label;
+          btn.href = spec.href;
+          btn.removeAttribute('download');
+          if (spec.termPlat && window.selectTermPlatform) window.selectTermPlatform(spec.termPlat);
+        } else if (manifestData && Array.isArray(manifestData.artifacts)) {
+          const art = manifestData.artifacts.find(a => a.filename === spec.filename || a.os === key);
+          if (art) {
+            btn.textContent = `${spec.label} (${art.sizeHuman})`;
+            btn.href = art.url;
+            btn.setAttribute('download', '');
+            if (meta) {
+              meta.innerHTML = `Type: <code>${art.artifactType || 'archive'}</code> · Status: <strong>${art.channel || 'development'}</strong> · Signing: ${art.signingStatus || 'unsigned'} · SHA-256: <code>${art.sha256.slice(0, 16)}…</code>`;
+            }
+          } else {
+            btn.textContent = 'Artifact unavailable — see terminal install';
+            btn.href = '#terminal-install';
+            btn.removeAttribute('download');
+            if (meta) meta.textContent = 'No matching binary artifact in current release manifest.';
+          }
+        } else {
+          btn.textContent = spec.label;
+          btn.href = spec.href;
+          btn.setAttribute('download', '');
+          if (meta) meta.textContent = '';
+        }
       }
       if (sel && sel.value !== key) sel.value = key;
     }
@@ -418,6 +455,8 @@ git checkout v0.4.0 &amp;&amp; npm install &amp;&amp; npm run build</pre>
     function detectHeroPlatform() {
       const ua = navigator.userAgent.toLowerCase();
       if (/android/.test(ua)) applyHeroPlatform('android');
+      else if (/iphone|ipad|ipod/.test(ua)) applyHeroPlatform('ios');
+      else if (/windows/.test(ua)) applyHeroPlatform('windows');
       else if (/linux/.test(ua) && !/mac/.test(ua)) applyHeroPlatform('linux-deb');
       else applyHeroPlatform('macos');
     }
@@ -430,45 +469,70 @@ git checkout v0.4.0 &amp;&amp; npm install &amp;&amp; npm run build</pre>
       if (!tbody || !manifestData || !Array.isArray(manifestData.artifacts)) return;
       tbody.innerHTML = manifestData.artifacts.map(a => `
         <tr style="border-bottom:1px solid var(--border);">
-          <td style="padding:8px 6px;"><a href="${a.url}" download><code>${a.filename}</code></a></td>
-          <td style="padding:8px 6px;">${a.platform}</td>
+          <td style="padding:8px 6px;"><a href="${a.url}" download><code>${a.filename}</code></a><div class="muted" style="font-size:11px;">${a.artifactType || 'package'} · ${a.channel || 'development'}</div></td>
+          <td style="padding:8px 6px;">${a.platform}<div class="muted" style="font-size:11px;">${a.requirements || ''}</div></td>
           <td style="padding:8px 6px;">${a.arch}</td>
           <td style="padding:8px 6px;">${a.sizeHuman}</td>
-          <td style="padding:8px 6px;" class="muted">${a.signing} · ${a.license}</td>
+          <td style="padding:8px 6px;" class="muted">${a.signingStatus || 'unsigned'}: ${a.signing} · ${a.license}</td>
           <td style="padding:8px 6px;" class="mono" style="font-size:11px;"><code>${a.sha256.slice(0, 16)}…</code></td>
         </tr>
       `).join('');
     }
 
     // Hydrate from verified release-manifest.json
-    let manifestData = null;
     async function loadManifest() {
+      const banner = document.getElementById('manifest-error-banner');
       try {
         const res = await fetch('/release-manifest.json');
-        if (!res.ok) return;
-        manifestData = await res.json();
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const parsed = await res.json();
+        if (!parsed || !parsed.version || !Array.isArray(parsed.artifacts)) {
+          throw new Error('Invalid release-manifest.json structure');
+        }
+        manifestData = parsed;
+        if (banner) banner.style.display = 'none';
         document.querySelectorAll('.manifest-version').forEach(el => el.textContent = manifestData.version);
+        applyHeroPlatform(document.getElementById('hero-os-select').value);
         renderDesktopDownloads();
         renderManifestTable();
-      } catch {}
+      } catch (err) {
+        manifestData = null;
+        if (banner) {
+          banner.style.display = 'block';
+          banner.textContent = `Release manifest unavailable (${err instanceof Error ? err.message : 'fetch error'}). Direct binary downloads are disabled; use verified source checkout instructions below.`;
+        }
+        const btn = document.getElementById('hero-primary-btn');
+        if (btn) {
+          btn.textContent = 'Use Source Checkout';
+          btn.href = '#terminal-install';
+          btn.removeAttribute('download');
+        }
+        renderDesktopDownloads();
+      }
     }
 
     function renderDesktopDownloads() {
       const arch = document.getElementById('desktop-arch').value;
       const box = document.getElementById('desktop-downloads');
-      if (arch === 'arm64') {
-        box.innerHTML = `
-          <a class="btn primary" href="/releases/Wazir-Shell-0.4.1-macos-arm64.tar.gz" download>Download Wazir Shell (macOS ARM64)</a>
-          <a class="btn" href="/releases/Wazir-Mission-Control-0.4.1-macos-arm64.tar.gz" download>Download Mission Control (macOS ARM64)</a>
-          <a class="btn" href="/releases/wazir_0.4.1_all.deb" download>Download Linux .deb (ARM64 / x64)</a>
-        `;
-      } else {
-        box.innerHTML = `
-          <a class="btn primary" href="/releases/wazir_0.4.1_all.deb" download>Download Linux .deb (x86_64)</a>
-          <a class="btn" href="/releases/wazir-cli-0.4.1-any.tar.gz" download>Download Universal CLI Bundle</a>
-          <a class="btn" href="/releases/wazir-0.4.1.tar.gz" download>Download Linux Source &amp; RPM Spec</a>
-        `;
+      if (!manifestData || !Array.isArray(manifestData.artifacts)) {
+        box.innerHTML = `<div class="muted" style="font-size:13px;padding:12px;border:1px dashed var(--border);border-radius:10px;">Release manifest unavailable. Use <a href="#terminal-install">source checkout</a> to build for <code>${arch}</code>.</div>`;
+        return;
       }
+      const wanted = arch === 'arm64'
+        ? ['Wazir-Shell-0.4.2-macos-arm64.tar.gz', 'Wazir-Mission-Control-0.4.2-macos-arm64.tar.gz', 'wazir_0.4.2_all.deb']
+        : ['wazir_0.4.2_all.deb', 'wazir-cli-0.4.2-any.tar.gz', 'wazir-0.4.2.tar.gz'];
+      const matched = wanted
+        .map(name => manifestData.artifacts.find(a => a.filename === name))
+        .filter(Boolean);
+      if (matched.length === 0) {
+        box.innerHTML = `<div class="muted" style="font-size:13px;padding:12px;border:1px dashed var(--border);border-radius:10px;">No prebuilt desktop artifacts for <code>${arch}</code> in this manifest.</div>`;
+        return;
+      }
+      box.innerHTML = matched.map((a, idx) => `
+        <a class="btn ${idx === 0 ? 'primary' : ''}" href="${a.url}" download>
+          ${a.platform} (${a.sizeHuman} · ${a.signingStatus || 'unsigned'})
+        </a>
+      `).join('');
     }
     document.getElementById('desktop-arch').onchange = renderDesktopDownloads;
     renderDesktopDownloads();
@@ -491,15 +555,15 @@ git checkout v0.4.0 &amp;&amp; npm install &amp;&amp; npm run build</pre>
     // Terminal install tabs
     const TERM_PLATS = {
       macos: {
-        cmd: `curl -LO ${ORIGIN}/releases/wazir-cli-0.4.1-any.tar.gz\ncurl -LO ${ORIGIN}/releases/SHA256SUMS.txt\nshasum -a 256 -c SHA256SUMS.txt --ignore-missing\ntar -xzf wazir-cli-0.4.1-any.tar.gz\nnode bin/wa.js about && node bin/wa.js doctor\n\n# Or via Homebrew:\nbrew tap whassan007/tap && brew install wazir`,
+        cmd: `curl -LO ${ORIGIN}/releases/wazir-cli-0.4.2-any.tar.gz\ncurl -LO ${ORIGIN}/releases/SHA256SUMS.txt\nshasum -a 256 -c SHA256SUMS.txt --ignore-missing\ntar -xzf wazir-cli-0.4.2-any.tar.gz\nnode bin/wa.js about && node bin/wa.js doctor\n\n# Or via Homebrew:\nbrew tap whassan007/tap && brew install wazir`,
         arch: 'arm64 / x86_64', dest: '~/.local/bin/wa (source) or /opt/homebrew/bin/wa', verify: 'wa about && wa doctor && wa route "explain chmod 755"', upgrade: 'brew upgrade wazir (or re-run bash scripts/install.sh)', uninstall: 'brew uninstall wazir && rm -rf ~/.wazir'
       },
       debian: {
-        cmd: `curl -LO ${ORIGIN}/releases/wazir_0.4.1_all.deb\ncurl -LO ${ORIGIN}/releases/SHA256SUMS.txt\nsha256sum -c SHA256SUMS.txt --ignore-missing\nsudo dpkg -i wazir_0.4.1_all.deb\nwa about && wa doctor`,
+        cmd: `curl -LO ${ORIGIN}/releases/wazir_0.4.2_all.deb\ncurl -LO ${ORIGIN}/releases/SHA256SUMS.txt\nsha256sum -c SHA256SUMS.txt --ignore-missing\nsudo dpkg -i wazir_0.4.2_all.deb\nwa about && wa doctor`,
         arch: 'x86_64, arm64', dest: '/usr/bin/wa & systemd units', verify: 'wa about && wa doctor && wa shell -c "version"', upgrade: 'sudo dpkg -i wazir_<ver>_all.deb', uninstall: 'sudo apt remove wazir'
       },
       fedora: {
-        cmd: `curl -LO ${ORIGIN}/releases/wazir-0.4.1.tar.gz\ncurl -LO ${ORIGIN}/releases/SHA256SUMS.txt\nsha256sum -c SHA256SUMS.txt --ignore-missing\ntar -xzf wazir-0.4.1.tar.gz\nrpmbuild -tb wazir-0.4.1.tar.gz`,
+        cmd: `curl -LO ${ORIGIN}/releases/wazir-0.4.2.tar.gz\ncurl -LO ${ORIGIN}/releases/SHA256SUMS.txt\nsha256sum -c SHA256SUMS.txt --ignore-missing\ntar -xzf wazir-0.4.2.tar.gz\nrpmbuild -tb wazir-0.4.2.tar.gz`,
         arch: 'x86_64, arm64', dest: '/usr/bin/wa', verify: 'wa about && wa doctor', upgrade: 'sudo dnf upgrade wazir', uninstall: 'sudo dnf remove wazir'
       },
       linux: {
@@ -524,7 +588,7 @@ git checkout v0.4.0 &amp;&amp; npm install &amp;&amp; npm run build</pre>
       currentTermCmd = d.cmd;
       document.getElementById('term-cmd').textContent = d.cmd;
       document.getElementById('term-meta').innerHTML = `
-        <div><strong>Version:</strong> v0.4.1</div>
+        <div><strong>Version:</strong> v0.4.2</div>
         <div><strong>Arch:</strong> ${d.arch}</div>
         <div><strong>Destination:</strong> <code>${d.dest}</code></div>
         <div><strong>Verify:</strong> <code>${d.verify}</code></div>

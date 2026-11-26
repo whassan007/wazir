@@ -1,3 +1,5 @@
+import { readActiveWazirTheme, type WazirThemePreset } from '@wazir/core';
+
 const codes = {
   reset: '\x1b[0m',
   bold: '\x1b[1m',
@@ -13,6 +15,20 @@ const codes = {
 
 type Color = keyof typeof codes;
 
+export function getActiveCliTheme(): WazirThemePreset {
+  return readActiveWazirTheme();
+}
+
+export function hexToAnsiFg(hex: string): string {
+  const clean = hex.replace('#', '');
+  if (clean.length !== 6) return '';
+  const r = Number.parseInt(clean.slice(0, 2), 16);
+  const g = Number.parseInt(clean.slice(2, 4), 16);
+  const b = Number.parseInt(clean.slice(4, 6), 16);
+  if ([r, g, b].some((n) => Number.isNaN(n))) return '';
+  return `\x1b[38;2;${r};${g};${b}m`;
+}
+
 export function isColorEnabled(): boolean {
   if (process.argv.includes('--no-color')) return false;
   if (process.env.NO_COLOR !== undefined && process.env.NO_COLOR !== '') return false;
@@ -24,6 +40,12 @@ export function isColorEnabled(): boolean {
 export function paint(text: string, color: Color): string {
   if (!isColorEnabled()) return text;
   return `${codes[color]}${text}${codes.reset}`;
+}
+
+export function paintHex(text: string, hex: string): string {
+  if (!isColorEnabled()) return text;
+  const fg = hexToAnsiFg(hex);
+  return fg ? `${fg}${text}${codes.reset}` : text;
 }
 
 export const color = {

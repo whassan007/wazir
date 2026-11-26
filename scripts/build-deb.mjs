@@ -121,12 +121,22 @@ if (dpkgAvailable) {
   console.log(`Building package using dpkg-deb -> ${debFile}...`);
   execSync(`dpkg-deb --build --root-owner-group "${stagingDir}" "${debFile}"`, { stdio: 'inherit' });
 } else {
-  console.log('dpkg-deb not available in environment; archiving package structure.');
-  execSync(`tar -czf "${debFile}.tar.gz" -C "${debOutputDir}" "wazir_${version}_all"`, { stdio: 'inherit' });
+  console.log(`dpkg-deb not available; assembling ar .deb archive -> ${debFile}...`);
+  const arWorkDir = path.join(debOutputDir, `ar-work-${version}`);
+  rmSync(arWorkDir, { recursive: true, force: true });
+  mkdirSync(arWorkDir, { recursive: true });
+  writeFileSync(path.join(arWorkDir, 'debian-binary'), '2.0\n', 'utf8');
+  execSync(`tar -czf "${path.join(arWorkDir, 'control.tar.gz')}" -C "${path.join(stagingDir, 'DEBIAN')}" .`, { stdio: 'inherit' });
+  execSync(`tar --exclude='./DEBIAN' -czf "${path.join(arWorkDir, 'data.tar.gz')}" -C "${stagingDir}" .`, { stdio: 'inherit' });
+  rmSync(debFile, { force: true });
+  execSync(`ar rcs "${debFile}" "${path.join(arWorkDir, 'debian-binary')}" "${path.join(arWorkDir, 'control.tar.gz')}" "${path.join(arWorkDir, 'data.tar.gz')}"`, { stdio: 'inherit' });
+  rmSync(arWorkDir, { recursive: true, force: true });
 }
 
 if (existsSync(debFile)) {
-  console.log(`✓ Debian package created: ${debFile}`);
+  const distDeb = path.resolve(rootDir, `dist/wazir_${version}_all.deb`);
+  writeFileSync(distDeb, readFileSync(debFile));
+  console.log(`✓ Debian package created: ${debFile} (and ${distDeb})`);
   if (dpkgAvailable) {
     try {
       const info = execSync(`dpkg-deb -I "${debFile}"`, { stdio: ['ignore', 'pipe', 'ignore'] }).toString();
