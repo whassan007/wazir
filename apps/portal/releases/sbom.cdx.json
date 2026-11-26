@@ -3,10 +3,10 @@
   "specVersion": "1.5",
   "version": 1,
   "metadata": {
-    "timestamp": "2026-11-26T06:45:31.777Z",
+    "timestamp": "2026-11-26T07:57:11.244Z",
     "component": {
       "name": "wazir",
-      "version": "0.4.2",
+      "version": "0.4.3",
       "type": "application",
       "licenses": [
         {
@@ -5000,8 +5000,8 @@
     {
       "type": "library",
       "name": "wazir-shell",
-      "version": "0.4.2",
-      "purl": "pkg:cargo/wazir-shell@0.4.2"
+      "version": "0.4.3",
+      "purl": "pkg:cargo/wazir-shell@0.4.3"
     },
     {
       "type": "library",
@@ -5834,8 +5834,8 @@
     {
       "type": "library",
       "name": "wazir-desktop",
-      "version": "0.4.2",
-      "purl": "pkg:cargo/wazir-desktop@0.4.2"
+      "version": "0.4.3",
+      "purl": "pkg:cargo/wazir-desktop@0.4.3"
     },
     {
       "type": "library",

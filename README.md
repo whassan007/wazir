@@ -9,7 +9,7 @@
 Wazir AI OS is a cross-platform, AI-native execution environment and model-agnostic meta-harness. It unifies traditional operating-system commands and natural-language AI requests in one universal terminal (`Wazir Shell` / `wa shell`), schedules work across local runtimes (Ollama, MLX, LM Studio) and distributed workers (macOS, Linux / NVIDIA DGX Spark, Windows), monitors every job in **Wazir Mission Control**, and verifies results against physical evidence rather than model self-reports.
 
 - **Public Portal & Downloads:** [wazir-portal.pages.dev](https://wazir-portal.pages.dev) ([Download Page](https://wazir-portal.pages.dev/download)) · Production domain: `https://wazir.wael.bot`
-- **Training & Operations Guide:** [Wazir AI OS Training, Operations & Fine-Tuning Guide (`v0.4.2`)](docs/training/WAZIR_TRAINING_GUIDE.md)
+- **Training & Operations Guide:** [Wazir AI OS Training, Operations & Fine-Tuning Guide (`v0.4.3`)](docs/training/WAZIR_TRAINING_GUIDE.md)
 - **Core Components:**
   1. **Wazir Shell & CLI (`wazir`, `wa`)** (`apps/cli/`, `apps/shell/`, `wa shell`) — Native interactive terminal with 4-tier `FastOrchestrator` (`Tier 0` `<5ms` deterministic builtins, `Tier 1` native PTY OS commands with persistent `cd`/`env`/`aliases` and descendant `SIGINT` termination, `Tier 2` sub-second local LLM streaming + optional embedded `wazir-shell-mini` 18-tool router, `Tier 3` full coding agent & `loop`/`graph`/`goal`/`jobs`/`status`/`inspect`/`pause`/`resume`/`stop` workflows) plus `wa route`, `wa latency`, and `wa debug`.
   2. **Loop, Graph & Goal Orchestration** (`packages/goals/src/workflow/`) — Bounded iterative Loop engine with collection discovery and crash recovery, acyclic DAG Graph compiler/controller with critical-path scheduling and branch isolation, and explainable automatic Goal compiler (`single` / `loop` / `graph` / `hybrid`).
@@ -482,7 +482,7 @@ Wazir runs natively on Linux, macOS and Windows with no emulation layer.
 
 ### Documentation, Training & Guides
 
-- **[Wazir Training, Operations & Fine-Tuning Guide (`v0.4.2`)](docs/training/WAZIR_TRAINING_GUIDE.md)** — Complete 5-module curriculum covering installation, 4-tier shell mastery, `loop`/`graph`/`goal` workflows, fleet operations, and LoRA/GGUF fine-tuning of `wazir-shell-mini` (`LiquidAI/LFM2.5-350M`).
+- **[Wazir Training, Operations & Fine-Tuning Guide (`v0.4.3`)](docs/training/WAZIR_TRAINING_GUIDE.md)** — Complete 5-module curriculum covering installation, 4-tier shell mastery, `loop`/`graph`/`goal` workflows, fleet operations, and LoRA/GGUF fine-tuning of `wazir-shell-mini` (`LiquidAI/LFM2.5-350M`).
 - **Training Pipeline Scripts:** `node scripts/generate-shell-training-dataset.mjs` & `python3 scripts/train-wazir-shell-mini.py`
 - [Wazir AI OS Architecture](docs/architecture/wazir-ai-os.md)
 - [Wazir Shell Architecture](docs/architecture/shell-architecture.md)

@@ -1,0 +1,14 @@
+Linux waelbot 7.0.0-1024-nvidia #25~24.04.1-Ubuntu SMP PREEMPT_DYNAMIC Thu Oct 22 21:37:03 UTC 2 aarch64 aarch64 aarch64 GNU/Linux
+Architecture:                            aarch64
+CPU op-mode(s):                          64-bit
+Byte Order:                              Little Endian
+CPU(s):                                  20
+On-line CPU(s) list:                     0-19
+Vendor ID:                               ARM
+Model name:                              Cortex-X925
+Model:                                   1
+Thread(s) per core:                      1
+Core(s) per socket:                      10
+{"models":[{"name":"qwen3.6:35b-a3b-q8_0","model":"qwen3.6:35b-a3b-q8_0","modified_at":"2026-09-08T21:34:15.237010315-07:00","size":38696967047,"digest":"0218f872e86baa9c7610509f27db36a7bc52eea7afee24688f81ca74ffcb6c77","details":{"parent_model":"","format":"gguf","family":"qwen35moe","families":["q
+Docker version 29.6.2, build dfc4efb
+DGX_EXIT=0
