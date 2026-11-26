@@ -1,0 +1,6 @@
+[worker@waelbot 2026-11-26T07:41:10.434Z] natsUrl=nats://100.80.184.43:14222 workflow=wf-two-node-fence-1795678869 node=v22.22.3 arch=arm64
+[worker@waelbot 2026-11-26T07:41:10.674Z] lease granted: rlease-b4eb05b5-ca9f-4a0a-9c70-18ac870f9a12 fencingToken=1; simulating a stall past TTL
+[worker@waelbot 2026-11-26T07:41:13.766Z] sent stale write evt-d6088412-8d12-4922-a4f2-49650683f001 with fencing_token=1
+[worker@waelbot 2026-11-26T07:41:13.766Z] verdict: resource.conflict {"rejected":true,"reason":"StaleFencingTokenError: Stale fencing token 1 for resource 'exclusive:shared-ledger' (expected >= 2)","currentToken":2}
+[worker@waelbot 2026-11-26T07:41:13.773Z] exit 0
+worker exit 0

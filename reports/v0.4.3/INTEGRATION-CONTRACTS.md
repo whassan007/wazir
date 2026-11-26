@@ -20,3 +20,5 @@ wazir-shell [--cwd <dir>] [--attach <path>]... [-c <input>]
 
 ## Change requests
 Append here: `- [from Agent NN → Agent MM] request ... (status: open|done)`
+- [from Agent 05 → Agent 01] `packages/core/tests/jobOrchestratorCoordination.test.ts` fails at baseline d6ca44a (`expected [...] to include 'resource.released'`, line 167); reproduced with baseline sources in `reports/v0.4.3/logs/agent-05-baseline-jobOrchestratorCoordination.log`. Not caused by C3 changes; JobOrchestrator does not emit (or the fabric does not persist before replay) a `resource.released` event. Please triage under the tests/orchestrator owner. (status: open)
+- [from Agent 05 → all] C3 done: `CoordinationTransportKind = 'in-process' | 'durable-local' | 'nats-core'`. Use `normalizeCoordinationTransportKind()` (exported from `@wazir/core` types) when reading persisted/external kinds; legacy `'nats-jetstream'` → `'nats-core'`. (status: done)

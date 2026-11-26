@@ -1,0 +1,150 @@
+
+> wazir@0.4.2 build
+> npm run build --workspaces --if-present && npm run bundle
+
+
+> @wazir/agents@0.4.2 build
+> tsc --build
+
+
+> @wazir/assurance@0.4.2 build
+> tsc --build
+
+
+> @wazir/core@0.4.2 build
+> tsc --build
+
+
+> @wazir/database@0.4.2 build
+> tsc --build
+
+
+> @wazir/evaluation@0.4.2 build
+> tsc --build
+
+
+> @wazir/goals@0.4.2 build
+> tsc --build
+
+
+> @wazir/memory@0.4.2 build
+> tsc --build
+
+
+> @wazir/models@0.4.2 build
+> tsc --build
+
+
+> @wazir/observability@0.4.2 build
+> tsc --build
+
+
+> @wazir/policies@0.4.2 build
+> tsc --build
+
+
+> @wazir/registry@0.4.2 build
+> tsc --build
+
+
+> @wazir/scheduler@0.4.2 build
+> tsc --build
+
+
+> @wazir/secrets@0.4.2 build
+> tsc --build
+
+
+> @wazir/shared@0.4.2 build
+> tsc
+
+
+> @wazir/tools@0.4.2 build
+> tsc --build
+
+
+> @wazir/workers@0.4.2 build
+> tsc --build
+
+
+> @wazir/runtimes-anthropic@0.4.2 build
+> tsc --build
+
+
+> @wazir/runtimes-google@0.4.2 build
+> tsc --build
+
+
+> @wazir/runtimes-interfaces@0.4.2 build
+> tsc --build
+
+
+> @wazir/runtimes-lmstudio@0.4.2 build
+> tsc --build
+
+
+> @wazir/runtimes-mlx@0.4.2 build
+> tsc --build
+
+
+> @wazir/runtimes-nvidia@0.4.2 build
+> tsc --build
+
+
+> @wazir/runtimes-ollama@0.4.2 build
+> tsc --build
+
+
+> @wazir/runtimes-openai@0.4.2 build
+> tsc --build
+
+
+> @wazir/api@0.4.2 build
+> tsc --build
+
+
+> @wazir/cli@0.4.2 build
+> tsc --build
+
+
+> @wazir/desktop@0.4.2 build
+> node -e "const { spawnSync } = require('node:child_process'); if (process.platform === 'linux' && spawnSync('pkg-config', ['--exists', 'dbus-1']).status !== 0) { if (process.env.WAZIR_SKIP_DESKTOP_NATIVE_BUILD === '1') { console.log('[@wazir/desktop] Skipping native Tauri build on headless Linux (WAZIR_SKIP_DESKTOP_NATIVE_BUILD=1)'); process.exit(0); } console.error('[@wazir/desktop] ERROR: native Tauri build requires dbus-1.pc and webkit2gtk on Linux'); process.exit(1); } const res = spawnSync('npx', ['--no-install', 'tauri', 'build', '--no-bundle'], { stdio: 'inherit', shell: true }); process.exit(res.status ?? 1);"
+
+        Info Looking up installed tauri packages to check mismatched versions...
+warning: function `check_pending_approvals` is never used
+   --> src/main.rs:367:4
+    |
+367 | fn check_pending_approvals(port: u16, token: &str) -> Vec<String> {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `wazir-desktop` (bin "wazir-desktop") generated 1 warning
+    Finished `release` profile [optimized] target(s) in 0.26s
+       Built application at: /Users/wael/Code/Wazir-v043/agent-05/apps/desktop/src-tauri/target/release/wazir-desktop
+
+> @wazir/shell@0.4.2 build
+> tauri build --no-bundle
+
+        Info Looking up installed tauri packages to check mismatched versions...
+    Finished `release` profile [optimized] target(s) in 0.22s
+       Built application at: /Users/wael/Code/Wazir-v043/agent-05/apps/shell/src-tauri/target/release/wazir-shell
+
+> @wazir/web@0.4.2 build
+> true
+
+
+> @wazir/worker@0.4.2 build
+> tsc
+
+
+> wazir@0.4.2 bundle
+> node scripts/bundle.mjs
+
+==> Bundling Wazir CLI into standalone executable: bin/wa.js
+
+  bin/wa.js      15.5mb ⚠️
+  bin/wa.js.map  33.7mb
+
+⚡ Done in 364ms
+✓ Standalone CLI bundle created at: /Users/wael/Code/Wazir-v043/agent-05/bin/wa.js

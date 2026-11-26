@@ -1,0 +1,7 @@
+$ docker stop wazir-nats-v043
+wazir-nats-v043
+exit 0
+$ docker rm wazir-nats-v043
+wazir-nats-v043
+exit 0
+       0

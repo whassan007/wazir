@@ -1,0 +1,13 @@
+[coordinator@WaelMacPro 2026-11-26T07:41:09.337Z] natsUrl=nats://127.0.0.1:14222 workflow=wf-two-node-fence-1795678869 node=v22.23.3 arch=arm64
+[coordinator@WaelMacPro 2026-11-26T07:41:09.346Z] waiting for remote worker registration
+[coordinator@WaelMacPro 2026-11-26T07:41:10.627Z] registered worker-waelbot (payload={"host":"waelbot","arch":"arm64"})
+[coordinator@WaelMacPro 2026-11-26T07:41:10.628Z] granted rlease-b4eb05b5-ca9f-4a0a-9c70-18ac870f9a12 to worker-waelbot fencingToken=1 ttl=1500ms
+[coordinator@WaelMacPro 2026-11-26T07:41:12.431Z] reclaimed expired leases: rlease-b4eb05b5-ca9f-4a0a-9c70-18ac870f9a12(worker-waelbot,t1)
+[coordinator@WaelMacPro 2026-11-26T07:41:12.431Z] granted rlease-8a0fcad4-d2ac-4dce-8de6-f47186f7ce2c to worker-mac-local fencingToken=2
+[coordinator@WaelMacPro 2026-11-26T07:41:12.431Z] fresh write ACCEPTED: ledger={"value":"written-by-current-holder","writtenBy":"worker-mac-local","token":2}
+[coordinator@WaelMacPro 2026-11-26T07:41:13.717Z] received write from worker-waelbot over NATS with fencing_token=1 payload={"op":"write","resource":"shared-ledger","value":"stale-write-from-worker-waelbot"}
+[coordinator@WaelMacPro 2026-11-26T07:41:13.719Z] stale write REJECTED: StaleFencingTokenError: Stale fencing token 1 for resource 'exclusive:shared-ledger' (expected >= 2)
+[coordinator@WaelMacPro 2026-11-26T07:41:13.719Z] validateFence(rlease-b4eb05b5-ca9f-4a0a-9c70-18ac870f9a12, worker-waelbot, 1) -> ResourceLeaseExpiredError: Resource lease 'rlease-b4eb05b5-ca9f-4a0a-9c70-18ac870f9a12' expired and resource 'exclusive:shared-ledger' moved to fencing token 2
+[coordinator@WaelMacPro 2026-11-26T07:41:13.723Z] final ledger={"value":"written-by-current-holder","writtenBy":"worker-mac-local","token":2} RESULT=PASS
+[coordinator@WaelMacPro 2026-11-26T07:41:14.228Z] exit 0
+coordinator exit 0
