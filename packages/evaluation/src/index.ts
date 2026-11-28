@@ -30,6 +30,7 @@ export * from './codeSpaceSearch.js';
 export * from './rrsiRegularizer.js';
 export * from './continualHarness.js';
 export * from './mosibRouter.js';
+export * from './unifiedOptimizationEngine.js';
 export * from './editors/governanceFence.js';
 export * from './editors/behavioralEditor.js';
 export * from './editors/domainKnowledgeEditor.js';

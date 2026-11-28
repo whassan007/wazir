@@ -11,6 +11,7 @@ import { closeMCPRegistries, parseWorkloadDistribution, type RoutingMode } from 
 import { installGlobalCrashHandlers } from './crashHandler.js';
 import { resolveAuthoritativePackageVersion } from './version.js';
 import { globalStartupProfiler } from './startupProfiler.js';
+import { registerConsolidatedCommands } from './commands/consolidatedCommands.js';
 
 let mcpRuntimeChecker: (() => boolean) | undefined;
 let deferredCommandsRegistered = false;
@@ -3121,6 +3122,7 @@ fabricCmd
   });
 
 program.addCommand(fabricCmd);
+registerConsolidatedCommands(program);
 
 globalStartupProfiler.mark('cli.commands_registered');
 

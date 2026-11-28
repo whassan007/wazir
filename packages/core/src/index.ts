@@ -34,3 +34,6 @@ export * from './proactive/toolReceipt.js';
 export * from './proactive/taskManager.js';
 export * from './resources/index.js';
 export * from './metaHarness/index.js';
+export * from './fleet/index.js';
+export * from './studio/index.js';
+export * from './sdk/index.js';
