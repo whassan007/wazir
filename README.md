@@ -19,6 +19,8 @@ Wazir AI OS is a cross-platform, AI-native execution environment and model-agnos
   6. **Wazir Mobile** (`apps/android/`, `scripts/install-termux.sh`) — Zero-root GrapheneOS/Android Jetpack Compose companion (`ai.wazir.mobile`) and Termux ARM64 CLI integration.
   7. **Wazir Diagnostics** (`packages/observability/`, `apps/api/src/diagnosticsRoutes.ts`) — Affirmative-consent, redacted diagnostic telemetry, crash fingerprinting, and bounded offline queue.
   8. **Wazir Portal** (`apps/portal/`, `apps/api/src/publicRoutes.ts`) — Editorial product website, verified release manifest, training resources, and sanitized public demo topology.
+  9. **Wazir Fleet** (`apps/wazir-fleet/`, `packages/core/src/fleet/`) — Native macOS SwiftUI fleet dashboard & menu bar app (`WazirControlPlaneBridge`) + deterministic fleet command parser, planner, and Tailscale/metrics probes.
+  10. **Wazir Studio, Unified Optimization & Extension SDK** (`packages/core/src/studio/`, `packages/evaluation/src/unifiedOptimizationEngine.ts`, `packages/core/src/sdk/`) — 16-node visual orchestration, phase-boundary routing with independent verification, and 6 domain extensions (`lorecraft`, `90nf-forge`, `bazaar`, `robotics-simulation`, `research-evaluation`, `software-development`).
 
 ## Architecture
 
@@ -192,7 +194,8 @@ wa run "explain what this repository does"
 | `wa route <expr>` / `wa latency` / `wa debug` | Inspect FastOrchestrator tier routing, 13-metric latency percentiles, and debug trace flags |
 | `wa loop` / `wa graph` / `wa goal run` | Execute bounded iterative Loops, acyclic DAG Graphs, or automatic hybrid Goal workflows |
 | `wa chat` | Conversation-first coding assistant (`--dashboard` for Mission Control) |
-| `wa fleet` | Full-screen Mission Control fleet dashboard |
+| `wa fleet` | Full-screen Mission Control fleet dashboard (`status`, `parse`, `plan`, `exec`) |
+| `wa studio` / `wa optimize` / `wa extensions` | Wazir Studio 16-node orchestration, Unified Optimization Engine, and Extension SDK |
 | `wa ask <prompt>` | One-shot question with automatic model/computer selection |
 | `wa run <prompt>` / `wa task run <prompt>` | Run a task end-to-end through the agent loop, policy-gated, with streaming output |
 | `wa task plan <prompt>` | Show the scheduling decision without executing |

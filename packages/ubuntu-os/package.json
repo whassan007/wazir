@@ -1,6 +1,6 @@
 {
   "name": "@wazir/ubuntu-os",
-  "version": "0.4.4",
+  "version": "0.5.0",
   "license": "AGPL-3.0-only",
   "description": "Wazir OS Ubuntu layer — hybrid shell, replaceable execution backends, inference/voice adapters, and fast-path telemetry",
   "type": "module",

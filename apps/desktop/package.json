@@ -1,6 +1,6 @@
 {
   "name": "@wazir/desktop",
-  "version": "0.4.4",
+  "version": "0.5.0",
   "license": "AGPL-3.0-only",
   "private": true,
   "description": "Wazir Desktop — native shell around the Wazir API and web dashboard",

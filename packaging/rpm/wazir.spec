@@ -1,5 +1,5 @@
 Name:           wazir
-Version:        0.4.4
+Version:        0.5.0
 Release:        1%{?dist}
 Summary:        Autonomous multi-agent AI coding harness and resource-governed fleet orchestrator
 License:        AGPL-3.0-only
@@ -74,6 +74,9 @@ fi
 %attr(0750, wazir, wazir) %dir %{_localstatedir}/log/wazir
 
 %changelog
+* Fri Nov 27 2026 Wael Hassan <wael@wazir.dev> - 0.5.0-1
+- Consolidate Wazir and Fleet into unified Wazir AI OS v0.5.0 with Wazir Fleet, Wazir Studio, Unified Optimization Engine, and Wazir Extension SDK
+
 * Thu Nov 26 2026 Wael Hassan <wael@wazir.dev> - 0.4.4-1
 - Ship standalone worker bundle bin/wazir-worker.js, fix NatsWireTransport PONG waiter, add ubuntu-acceptance.sh, and reconcile Wazir OS + CLI/Linux tests
 

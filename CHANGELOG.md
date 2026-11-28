@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.5.0 — 2026-11-27
+
+**Release**: `v0.5.0`
+**Theme**: Wazir & Fleet Repository Consolidation — Wazir Fleet SwiftUI, Wazir Studio, Unified Optimization Engine, and Wazir Extension SDK
+
+- **Repository Consolidation (`apps/wazir-fleet`, `packages/core/src/fleet/`)**:
+  - Absorbed `whassan007/Fleet` into Wazir with full Git history preserved, relicensed to **AGPL-3.0-only** with a separate commercial license option (`LICENSE-COMMERCIAL.md`).
+  - Added `WazirControlPlaneBridge.swift` syncing `~/.wazir/fleet-state.json` between the native macOS SwiftUI app (**Wazir Fleet**) and Wazir's canonical Node.js/TypeScript control plane.
+  - Integrated Fleet's deterministic command parser, Ollama/SSH planner & registry enricher, and Tailscale/metrics probes into `@wazir/core`.
+- **Wazir Studio (`packages/core/src/studio/`, `wa studio`)**:
+  - Added 16-node visual orchestration model, capacity-safe Qwen placement, safe-boundary dynamic model reassignment, and `SIMULATED` vs `LIVE` execution modes.
+- **Unified Optimization Engine (`packages/evaluation/src/unifiedOptimizationEngine.ts`, `wa optimize`)**:
+  - Added phase-boundary routing, session stickiness, model/harness comparison, independent verification gates (rejecting self-attestation), and bounded repair loops.
+- **Wazir Extension SDK (`packages/core/src/sdk/`, `wa extensions`)**:
+  - Added stable extension contracts with 6 reference domain extensions (`lorecraft`, `90nf-forge`, `bazaar`, `robotics-simulation`, `research-evaluation`, `software-development`).
+
 ## v0.4.1 — 2026-11-21
 
 **Release**: `v0.4.1`

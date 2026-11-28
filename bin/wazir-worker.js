@@ -8,11 +8,11 @@
   }
   const argv = process.argv.slice(2);
   if (argv.length === 1 && (argv[0] === '--version' || argv[0] === '-V' || argv[0] === 'version')) {
-    process.stdout.write("0.4.4" + '\n');
+    process.stdout.write("0.5.0" + '\n');
     process.exit(0);
   }
   if (argv.length === 2 && argv[0] === 'version' && (argv[1] === '--json' || argv[1] === '-j')) {
-    process.stdout.write("{\"version\":\"0.4.4\"}" + '\n');
+    process.stdout.write("{\"version\":\"0.5.0\"}" + '\n');
     process.exit(0);
   }
 })();
