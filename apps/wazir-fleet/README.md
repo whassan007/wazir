@@ -1,6 +1,6 @@
-# Fleet
+# Wazir Fleet
 
-[![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/license-PolyForm%20Noncommercial-blue)](LICENSE.md)
+[![License: AGPL-3.0-only](https://img.shields.io/badge/license-AGPL--3.0--only-blue)](../../LICENSE)
 
 A native macOS (SwiftUI) dashboard and command console for a local LLM compute fleet:
 Jetson AGX Thor, DGX Spark, ASUS GX10, Mac Studio, M5 MacBook Pro, the RTX workstation and the
@@ -102,9 +102,5 @@ reachable address (for Ollama, `OLLAMA_HOST=0.0.0.0`).
 
 ## License
 
-Fleet is **source-available** under the [PolyForm Noncommercial License 1.0.0](LICENSE.md).
-Personal, hobby, research, educational, nonprofit and government use are allowed, including
-changes and redistribution under the same terms. **Any commercial use is prohibited.** For a
-commercial license, open an issue to get in touch.
-
-Because it restricts commercial use, this license is not an OSI-approved open-source license.
+Wazir Fleet is part of Wazir AI OS and is licensed under the **GNU Affero General Public License v3.0 (`AGPL-3.0-only`)** ([`../../LICENSE`](../../LICENSE)).
+A separate commercial license is available for proprietary or commercial deployments; see [`../../LICENSE-COMMERCIAL.md`](../../LICENSE-COMMERCIAL.md).

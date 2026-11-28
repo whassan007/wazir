@@ -1,9 +1,10 @@
 # Commercial Licensing & Authorization
 
-Wazir AI OS is a **source-available** project.
+Wazir AI OS (including Wazir Core, Wazir Shell, Wazir Studio, and Wazir Fleet) is
+dual-licensed:
 
-- **Noncommercial Use:** Permitted under the applicable published license terms (AGPL-3.0-only for existing core/CLI/API components; proposed PolyForm Noncommercial 1.0.0 candidate for newly authored standalone non-AGPL modules, pending legal review).
-- **Commercial Use:** Commercial deployment, hosted SaaS/managed offerings, OEM/embedded redistribution, or proprietary enterprise integration of Wazir-branded commercial modules requires **prior written commercial authorization** from the rights holder (Wael Hassan / Wazir Maintainers).
+- **Open Source (AGPL-3.0-only):** Available under the GNU Affero General Public License v3.0 ([LICENSE](LICENSE)) with no additional noncommercial restrictions.
+- **Commercial License:** Commercial deployment without AGPL-3.0 copyleft obligations, hosted SaaS/managed offerings, OEM/embedded redistribution, or proprietary enterprise integration requires **prior written commercial authorization** from the rights holder (Wael Hassan / Wazir Maintainers).
 
 ## Requesting a Commercial License
 

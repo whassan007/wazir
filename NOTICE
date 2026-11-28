@@ -7,12 +7,18 @@ This product includes software developed by the Wazir AI OS project.
 LICENSING BOUNDARIES & ATTRIBUTION
 ================================================================================
 
-1. Existing Core & CLI Components (AGPL-3.0-only):
-   The existing Wazir repository components (packages/core, packages/agents,
-   packages/policies, packages/scheduler, packages/tools, apps/cli, apps/api,
-   apps/worker, apps/desktop, apps/android) are licensed under the GNU Affero
-   General Public License v3.0 (AGPL-3.0-only). See the LICENSE file for full
-   terms.
+1. Unified Wazir Platform & Wazir Fleet (AGPL-3.0-only):
+   The Wazir repository components (packages/core, packages/agents,
+   packages/policies, packages/scheduler, packages/tools, packages/evaluation,
+   packages/goals, packages/models, apps/cli, apps/api, apps/worker,
+   apps/desktop, apps/android, apps/wazir-fleet) are licensed under the GNU
+   Affero General Public License v3.0 (AGPL-3.0-only). See the LICENSE file
+   for full terms.
+
+   Wazir Fleet (`apps/wazir-fleet`, formerly `https://github.com/whassan007/Fleet`
+   at commit `793ab52`) was 100% authored by Wael Hassan (`whassan007`) and
+   relicensed from PolyForm Noncommercial 1.0.0 to AGPL-3.0-only by the sole
+   copyright holder upon consolidation into Wazir.
 
 2. Selective Qwen Code Transplant (Apache-2.0):
    Portions of `packages/agents/src/qwenCore/*` and `packages/tools/src/{editMatcher,multiEdit,readManyFiles,todoTool}.ts`
