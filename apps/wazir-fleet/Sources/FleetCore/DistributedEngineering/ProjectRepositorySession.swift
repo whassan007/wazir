@@ -9,6 +9,23 @@ public enum BuildSystemKind: String, Codable, Sendable, Equatable {
     case generic
 }
 
+public struct RepoBranchInfo: Codable, Sendable, Equatable, Hashable, Identifiable {
+    public var id: String { name }
+    public var name: String
+    public var isCurrent: Bool
+    public var isMainBranch: Bool
+    public var shortSHA: String
+    public var subject: String
+
+    public init(name: String, isCurrent: Bool = false, shortSHA: String = "", subject: String = "") {
+        self.name = name
+        self.isCurrent = isCurrent
+        self.isMainBranch = (name == "main" || name == "master" || name == "develop")
+        self.shortSHA = shortSHA
+        self.subject = subject
+    }
+}
+
 public struct ProjectRepositoryContext: Codable, Sendable, Equatable {
     public var repoPath: String
     public var gitBranch: String
@@ -16,16 +33,18 @@ public struct ProjectRepositoryContext: Codable, Sendable, Equatable {
     public var trackedFiles: [String]
     public var dirtyHumanFiles: Set<String>
     public var detectedBuildSystem: BuildSystemKind
+    public var branches: [RepoBranchInfo]
 
     public init(repoPath: String, gitBranch: String = "main", headCommit: String? = nil,
                 trackedFiles: [String] = [], dirtyHumanFiles: Set<String> = [],
-                detectedBuildSystem: BuildSystemKind = .generic) {
+                detectedBuildSystem: BuildSystemKind = .generic, branches: [RepoBranchInfo] = []) {
         self.repoPath = repoPath
         self.gitBranch = gitBranch
         self.headCommit = headCommit
         self.trackedFiles = trackedFiles
         self.dirtyHumanFiles = dirtyHumanFiles
         self.detectedBuildSystem = detectedBuildSystem
+        self.branches = branches
     }
 }
 
@@ -64,6 +83,7 @@ public struct RepositoryIntrospector: Sendable {
         var headCommit: String?
         var dirtyFiles: Set<String> = []
         var tracked: [String] = []
+        var branches: [RepoBranchInfo] = []
 
         if let br = try? await ProcessRunner.capture("/usr/bin/git", ["-C", repoPath, "rev-parse", "--abbrev-ref", "HEAD"], timeout: 5),
            br.status == 0 {
@@ -84,6 +104,19 @@ public struct RepositoryIntrospector: Sendable {
            ls.status == 0 {
             tracked = ls.stdout.split(whereSeparator: \.isNewline).map(String.init)
         }
+        if let brList = try? await ProcessRunner.capture("/usr/bin/git", ["-C", repoPath, "for-each-ref", "--format=%(refname:short)|%(HEAD)|%(objectname:short)|%(subject)", "refs/heads/"], timeout: 5),
+           brList.status == 0 {
+            for line in brList.stdout.split(whereSeparator: \.isNewline) {
+                let parts = line.split(separator: "|", maxSplits: 3, omittingEmptySubsequences: false).map(String.init)
+                guard !parts.isEmpty, !parts[0].isEmpty else { continue }
+                let name = parts[0]
+                let isCur = parts.count > 1 && parts[1].trimmingCharacters(in: .whitespaces) == "*"
+                let sha = parts.count > 2 ? parts[2] : ""
+                let subj = parts.count > 3 ? parts[3] : ""
+                branches.append(RepoBranchInfo(name: name, isCurrent: isCur, shortSHA: sha, subject: subj))
+            }
+            branches.sort { ($0.isMainBranch ? 0 : ($0.isCurrent ? 1 : 2), $0.name) < ($1.isMainBranch ? 0 : ($1.isCurrent ? 1 : 2), $1.name) }
+        }
 
         if let coordinator, !dirtyFiles.isEmpty {
             await coordinator.protectHumanModifications(Array(dirtyFiles))
@@ -95,7 +128,8 @@ public struct RepositoryIntrospector: Sendable {
             headCommit: headCommit,
             trackedFiles: tracked,
             dirtyHumanFiles: dirtyFiles,
-            detectedBuildSystem: buildSystem
+            detectedBuildSystem: buildSystem,
+            branches: branches
         )
     }
 

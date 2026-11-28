@@ -196,45 +196,153 @@ public enum AgentPrompts {
     }
 
     /// Extracts subtasks from the planner's reply: JSON (possibly fenced or surrounded by
-    /// prose), else a numbered or bulleted list. Returns at most `limit`.
+    /// prose), else a numbered, bulleted, or heading-based list. Deduplicates by canonical fingerprint.
     public static func parseSubtasks(_ reply: String, limit: Int) -> [Subtask] {
         let text = ChatStreamParser.stripThinking(reply)
-        struct Plan: Decodable { var subtasks: [Item] }
-        struct Item: Decodable { var title: String?; var task: String? }
-        func clean(_ items: [Item]) -> [Subtask] {
-            items.compactMap { i in
-                let task = (i.task ?? i.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !task.isEmpty else { return nil }
-                let title = (i.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                return Subtask(title: title.isEmpty ? shortTitle(task) : shortTitle(title), task: task)
+        struct Plan: Decodable {
+            var subtasks: [Item]?
+            var workstreams: [Item]?
+            var tasks: [Item]?
+            var steps: [Item]?
+            var plan: [Item]?
+            var items: [Item]?
+            var nodes: [Item]?
+
+            var allItems: [Item] {
+                subtasks ?? workstreams ?? tasks ?? steps ?? plan ?? items ?? nodes ?? []
             }
         }
-        if let open = text.firstIndex(of: "{"), let close = text.lastIndex(of: "}"), open < close,
-           let plan = try? JSONDecoder().decode(Plan.self, from: Data(text[open...close].utf8)) {
-            let s = clean(plan.subtasks)
-            if !s.isEmpty { return Array(s.prefix(limit)) }
+        struct Item: Decodable {
+            var title: String?
+            var name: String?
+            var heading: String?
+            var id: String?
+            var task: String?
+            var description: String?
+            var objective: String?
+            var prompt: String?
+            var instructions: String?
+
+            var resolvedTitle: String {
+                (title ?? name ?? heading ?? id ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            var resolvedTask: String {
+                (task ?? description ?? objective ?? prompt ?? instructions ?? resolvedTitle)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            }
         }
-        if let open = text.firstIndex(of: "["), let close = text.lastIndex(of: "]"), open < close,
-           let items = try? JSONDecoder().decode([Item].self, from: Data(text[open...close].utf8)) {
-            let s = clean(items)
-            if !s.isEmpty { return Array(s.prefix(limit)) }
+        func clean(_ items: [Item]) -> [Subtask] {
+            let raw = items.compactMap { i -> Subtask? in
+                let task = i.resolvedTask
+                guard !task.isEmpty else { return nil }
+                let title = i.resolvedTitle
+                return Subtask(title: title.isEmpty ? shortTitle(task) : shortTitle(title), task: task)
+            }
+            return deduplicateSubtasks(raw)
         }
-        // List fallback: "1. ...", "2) ...", "- ...", "* ..."
+
+        // 1. Balanced JSON object extraction (handles braces in surrounding prose)
+        for candidate in extractBalancedJSON(in: text, openChar: "{", closeChar: "}") {
+            if let plan = try? JSONDecoder().decode(Plan.self, from: Data(candidate.utf8)) {
+                let s = clean(plan.allItems)
+                if !s.isEmpty { return Array(s.prefix(limit)) }
+            }
+        }
+        // 2. Balanced JSON array extraction
+        for candidate in extractBalancedJSON(in: text, openChar: "[", closeChar: "]") {
+            if let items = try? JSONDecoder().decode([Item].self, from: Data(candidate.utf8)) {
+                let s = clean(items)
+                if !s.isEmpty { return Array(s.prefix(limit)) }
+            }
+        }
+        // 3. List & markdown heading fallback: "1. ...", "2) ...", "- ...", "* ...", "### 1. ..."
         var out: [Subtask] = []
         for raw in text.split(whereSeparator: \.isNewline) {
             var line = raw.trimmingCharacters(in: .whitespaces)
-            if let m = line.firstMatch(of: /^(\d+[.)]|[-*•])\s+/) { line.removeSubrange(m.range) } else { continue }
+            if let m = line.firstMatch(of: /^#{1,4}\s*(\d+[.)]|Workstream\s*\d+[:.]?)?\s*/i) {
+                line.removeSubrange(m.range)
+            } else if let m = line.firstMatch(of: /^(\d+[.)]|[-*•])\s+/) {
+                line.removeSubrange(m.range)
+            } else {
+                continue
+            }
             line = line.replacingOccurrences(of: "**", with: "")
             guard !line.isEmpty else { continue }
             let parts = line.split(separator: ":", maxSplits: 1)
-            if parts.count == 2, parts[0].count <= 40 {
+            if parts.count == 2, parts[0].count <= 48 {
                 out.append(Subtask(title: shortTitle(String(parts[0])),
                                    task: parts[1].trimmingCharacters(in: .whitespaces)))
             } else {
                 out.append(Subtask(title: shortTitle(line), task: line))
             }
         }
-        return Array(out.prefix(limit))
+        return Array(deduplicateSubtasks(out).prefix(limit))
+    }
+
+    public static func canonicalFingerprint(for subtask: Subtask) -> String {
+        let combined = "\(subtask.title.lowercased())|\(subtask.task.lowercased())"
+        return combined.components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+            .joined(separator: "_")
+    }
+
+    public static func deduplicateSubtasks(_ subtasks: [Subtask]) -> [Subtask] {
+        var seen = Set<String>()
+        var out: [Subtask] = []
+        for s in subtasks {
+            let fp = canonicalFingerprint(for: s)
+            guard !fp.isEmpty, seen.insert(fp).inserted else { continue }
+            out.append(s)
+        }
+        return out
+    }
+
+    /// Deterministic fallback decomposition when a planner returns unparseable output for a multi-part goal.
+    public static func deterministicDecompose(goal: String, limit: Int) -> [Subtask] {
+        let lines = goal.split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { $0.hasPrefix("## ") || $0.hasPrefix("### ") || $0.hasPrefix("- ") || $0.firstMatch(of: /^\d+[.)]\s+/) != nil }
+        if lines.count >= 2 {
+            let parsed = lines.prefix(limit).map { line -> Subtask in
+                let cleaned = line.replacingOccurrences(of: "#", with: "")
+                    .replacingOccurrences(of: "**", with: "")
+                    .trimmingCharacters(in: .whitespaces)
+                return Subtask(title: shortTitle(cleaned), task: cleaned)
+            }
+            let deduped = deduplicateSubtasks(parsed)
+            if deduped.count >= 2 { return deduped }
+        }
+        return [
+            Subtask(title: "Inspect & Scope", task: "Inspect existing repository files, contracts, and constraints for: \(shortTitle(goal))"),
+            Subtask(title: "Implement Core", task: "Implement the primary required changes for: \(shortTitle(goal))"),
+            Subtask(title: "Verify & Test", task: "Add deterministic verification and tests for: \(shortTitle(goal))")
+        ]
+    }
+
+    private static func extractBalancedJSON(in text: String, openChar: Character, closeChar: Character) -> [String] {
+        var results: [String] = []
+        var depth = 0
+        var start: String.Index?
+        var inString = false
+        var escaped = false
+        for idx in text.indices {
+            let ch = text[idx]
+            if escaped { escaped = false; continue }
+            if ch == "\\" && inString { escaped = true; continue }
+            if ch == "\"" { inString.toggle(); continue }
+            if inString { continue }
+            if ch == openChar {
+                if depth == 0 { start = idx }
+                depth += 1
+            } else if ch == closeChar, depth > 0 {
+                depth -= 1
+                if depth == 0, let s = start {
+                    results.append(String(text[s...idx]))
+                    start = nil
+                }
+            }
+        }
+        return results
     }
 
     static func shortTitle(_ s: String) -> String {

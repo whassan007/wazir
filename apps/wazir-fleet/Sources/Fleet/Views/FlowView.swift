@@ -16,12 +16,19 @@ struct FlowView: View {
     @State private var source: FlowSource?
     @State private var demo = AgentSimulation()
     @State private var live = LiveAgentRun()
-    @State private var liveMode = true
     @State private var selectedNode: String?
     @State private var viewport = FlowViewport()
     @State private var showPlannerPicker = false
     /// The user's planner choice; nil means "pick a sensible default".
     @State private var plannerChoice: FleetWorker?
+
+    private var liveMode: Bool { store.flowLiveMode }
+
+    private func switchToLiveMode() {
+        demo.stop()
+        store.flowLiveMode = true
+        refreshPreview()
+    }
 
     private var resolved: FlowSource {
         if let source { return source }
@@ -44,7 +51,10 @@ struct FlowView: View {
         HStack(spacing: 0) {
             VStack(spacing: 0) {
                 header
-                if resolved == .demo { StageBar(stage: currentStage) }
+                if resolved == .demo {
+                    StageBar(stage: currentStage)
+                    branchLanesBar
+                }
                 TimelineView(.animation) { tl in
                     let clock = tl.date.timeIntervalSinceReferenceDate
                     let (graph, now) = snapshot(clock: clock)
@@ -55,13 +65,21 @@ struct FlowView: View {
                                                             set: { showPlannerPicker = $0 })) {
                             PlannerPicker(models: chatModels, selection: Binding(get: { planner }, set: { setPlanner($0) }),
                                           reviewPlan: Binding(get: { live.reviewPlan }, set: { live.reviewPlan = $0 }),
-                                          liveMode: $liveMode, isRunning: agentRun.isRunning)
+                                          isRunning: agentRun.isRunning)
                         }
                         .overlay(alignment: .topLeading) { canvasTelemetryHUD }
-                        .overlay(alignment: .bottom) { reviewBanner }
+                        .overlay(alignment: .bottom) {
+                            VStack(spacing: 6) {
+                                reviewBanner
+                                resultLoopBanner
+                            }
+                        }
                         .overlay(alignment: .bottomTrailing) { canvasControls }
                         Divider()
-                        FlowTimelineStrip(graph: graph, now: now).frame(height: 130)
+                        FlowTimelineStrip(graph: graph, now: now).frame(height: 96)
+                        if resolved == .demo {
+                            bottomPromptComposerBar
+                        }
                     }
                 }
             }
@@ -73,10 +91,14 @@ struct FlowView: View {
         .background(FlowTheme.background)
         .environment(\.colorScheme, .dark)
         .onChange(of: resolved) { selectedNode = nil }
-        .onChange(of: liveMode) { refreshPreview() }
+        .onChange(of: store.flowLiveMode) { refreshPreview() }
+        .onChange(of: store.lastFullRefresh) { refreshPreview() }
         .onChange(of: planner) { refreshPreview() }
         .onChange(of: live.finalAnswer) { if live.finalAnswer != nil { selectedNode = "result" } }
-        .onAppear { refreshPreview() }
+        .onAppear {
+            demo.prompt = store.activePromptText
+            refreshPreview()
+        }
     }
 
     // MARK: Header & canvas chrome
@@ -93,8 +115,30 @@ struct FlowView: View {
                 }
             }
             .frame(maxWidth: 420)
+            if !liveMode {
+                Button("Simulated Mode · Switch to Live") { switchToLiveMode() }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.orange)
+                    .controlSize(.small)
+            }
             Spacer()
             legend
+            Menu {
+                Button(liveMode ? "Switch to Simulated Demo Mode" : "✓ Simulated Demo Mode (Switch to Live)") {
+                    if liveMode {
+                        live.stop()
+                        store.flowLiveMode = false
+                    } else {
+                        switchToLiveMode()
+                    }
+                }
+                Divider()
+                Button("Reset Canvas Layout") { withAnimation(.snappy) { viewport = FlowViewport() } }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
@@ -128,7 +172,7 @@ struct FlowView: View {
     }
 
     private var pumpHint: String? {
-        guard resolved == .demo, !agentRun.isRunning, agentRun.graph.nodes.count <= 1 else { return nil }
+        guard resolved == .demo, !agentRun.isRunning, live.stage == .idle else { return nil }
         return planner == nil ? "Click to choose a planner machine" : "Click to change the planner"
     }
 
@@ -149,6 +193,47 @@ struct FlowView: View {
             .background(RoundedRectangle(cornerRadius: 12).fill(Color(red: 0.07, green: 0.08, blue: 0.11)))
             .overlay(RoundedRectangle(cornerRadius: 12).stroke(FlowStatus.running.color.opacity(0.4)))
             .padding(.bottom, 54)
+        }
+    }
+
+    @ViewBuilder private var resultLoopBanner: some View {
+        if resolved == .demo, liveMode, live.stage == .finished, live.finalAnswer != nil {
+            HStack(spacing: 12) {
+                Image(systemName: "checkmark.seal.fill").foregroundStyle(FlowStatus.done.color)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Result Finalized").font(.system(size: 13, weight: .semibold))
+                    Text("Loop this result back into the prompt to execute or refine the plan.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Button("Loop Result to Prompt") {
+                    loopResultToPrompt(executeImmediately: false)
+                }
+                .buttonStyle(.bordered)
+                Button("Loop & Execute Plan Now") {
+                    loopResultToPrompt(executeImmediately: true)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(FlowStatus.done.color)
+            }
+            .padding(.horizontal, 14).padding(.vertical, 10)
+            .background(RoundedRectangle(cornerRadius: 12).fill(Color(red: 0.07, green: 0.08, blue: 0.11)))
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(FlowStatus.done.color.opacity(0.45)))
+            .padding(.bottom, 14)
+        }
+    }
+
+    private func loopResultToPrompt(executeImmediately: Bool) {
+        guard let answer = live.finalAnswer, !answer.isEmpty else { return }
+        let projectName = URL(fileURLWithPath: store.projectFolderPath).lastPathComponent
+        let loopedPrompt = """
+        Execute the following finalized plan in project `\(projectName)` (branch `\(store.selectedTargetBranch)`):
+
+        \(answer)
+        """
+        demo.prompt = loopedPrompt
+        store.activePromptText = loopedPrompt
+        if executeImmediately {
+            runLive()
         }
     }
 
@@ -191,63 +276,17 @@ struct FlowView: View {
     private var runControls: some View {
         @Bindable var demo = demo
         return VStack(alignment: .leading, spacing: 10) {
-            Picker("Mode", selection: $liveMode) {
-                Text("Simulated").tag(false)
-                Text("Live").tag(true)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .disabled(agentRun.isRunning)
-
-            Text("Prompt").font(.caption).foregroundStyle(.secondary)
-            TextEditor(text: $demo.prompt)
-                .font(.system(size: 13))
-                .scrollContentBackground(.hidden)
-                .padding(6)
-                .frame(height: 70)
-                .background(RoundedRectangle(cornerRadius: 8).fill(.white.opacity(0.05)))
-
-            Button { showPlannerPicker = true } label: {
+            if !liveMode {
                 HStack {
-                    Image(systemName: "cpu")
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text("Planner").font(.caption2).foregroundStyle(.secondary)
-                        Text(planner?.label ?? "Choose a machine…").font(.caption.monospaced()).lineLimit(1)
-                    }
+                    Text("Simulated Demo Mode").font(.caption.weight(.semibold)).foregroundStyle(.orange)
                     Spacer()
-                    Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.secondary)
-                }
-                .padding(8)
-                .background(RoundedRectangle(cornerRadius: 8).fill(.white.opacity(0.05)))
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .disabled(agentRun.isRunning)
-
-            HStack {
-                if liveMode {
-                    Button(live.isRunning ? "Restart" : "Run") { runLive() }
+                    Button("Back to Live") { switchToLiveMode() }
                         .buttonStyle(.borderedProminent)
-                        .disabled(planner == nil || demo.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    Button("Stop") { live.stop(); refreshPreview(keepResults: true) }.disabled(!live.isRunning)
-                    Spacer()
-                    Toggle("Review plan", isOn: Binding(get: { live.reviewPlan }, set: { live.reviewPlan = $0 }))
-                        .toggleStyle(.checkbox).font(.caption)
-                } else {
-                    Button(demo.isRunning ? "Restart" : "Run") {
-                        selectedNode = nil
-                        viewport.offsets = [:]
-                        let pool = planner.map { [($0.model, $0.host)] } ?? []
-                        demo.start(pool: pool + fleetPool.filter { $0.model != planner?.model || $0.host != planner?.host })
-                    }
-                    .buttonStyle(.borderedProminent)
-                    Button(demo.isPaused ? "Resume" : "Pause") { demo.isPaused.toggle() }
-                        .disabled(!demo.isRunning)
-                    Spacer()
-                    Slider(value: $demo.speed, in: 0.25...4).frame(width: 70)
-                    Text(String(format: "%.1f×", demo.speed)).font(.caption.monospacedDigit())
+                        .tint(.orange)
+                        .controlSize(.mini)
                 }
             }
+
             if liveMode {
                 let workers = workerPool
                 Group {
@@ -277,10 +316,149 @@ struct FlowView: View {
         }
     }
 
+    private var bottomPromptComposerBar: some View {
+        @Bindable var demo = demo
+        let projectName = URL(fileURLWithPath: store.projectFolderPath).lastPathComponent
+        return VStack(spacing: 8) {
+            TextField("Describe what to build, fix, or optimize in \(projectName)…", text: $demo.prompt, axis: .vertical)
+                .lineLimit(1...5)
+                .textFieldStyle(.plain)
+                .font(.system(size: 14))
+                .onChange(of: store.activePromptText) { _, val in demo.prompt = val }
+                .onChange(of: demo.prompt) { _, val in store.activePromptText = val }
+                .onSubmit { if liveMode { runLive() } }
+
+            HStack(spacing: 8) {
+                Button { store.promptForProjectFolder() } label: {
+                    Label(projectName, systemImage: "folder.fill")
+                        .font(.caption)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+
+                Menu {
+                    ForEach(store.projectContext?.branches ?? []) { br in
+                        Button {
+                            store.selectedTargetBranch = br.name
+                        } label: {
+                            Text("\(br.name == store.selectedTargetBranch ? "✓ " : "")\(br.name)\(br.isCurrent ? " (HEAD)" : "")")
+                        }
+                    }
+                    Divider()
+                    Button("Manage Branches & Prompts…") { store.showBranchesPopover = true }
+                } label: {
+                    Label(store.selectedTargetBranch, systemImage: "arrow.triangle.branch")
+                        .font(.caption.monospaced())
+                        .lineLimit(1)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+
+                Button { showPlannerPicker = true } label: {
+                    Label(planner?.label ?? "Choose Planner…", systemImage: "cpu")
+                        .font(.caption.monospaced())
+                        .lineLimit(1)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(agentRun.isRunning)
+
+                Button { store.showPromptComposer = true } label: {
+                    Label("Craft with AI", systemImage: "sparkles")
+                        .font(.caption)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+
+                if liveMode {
+                    Toggle("Review plan", isOn: Binding(get: { live.reviewPlan }, set: { live.reviewPlan = $0 }))
+                        .toggleStyle(.checkbox)
+                        .font(.caption)
+                }
+
+                Spacer()
+
+                if agentRun.isRunning {
+                    Button {
+                        if liveMode { live.stop(); refreshPreview(keepResults: true) } else { demo.stop() }
+                    } label: {
+                        Label("Stop", systemImage: "stop.circle.fill")
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.red)
+                    .controlSize(.small)
+                }
+
+                Button {
+                    if liveMode {
+                        runLive()
+                    } else {
+                        selectedNode = nil
+                        viewport.offsets = [:]
+                        let pool = planner.map { [($0.model, $0.host)] } ?? []
+                        demo.start(pool: pool + fleetPool.filter { $0.model != planner?.model || $0.host != planner?.host })
+                    }
+                } label: {
+                    Label(agentRun.isRunning ? "Restart" : "Run", systemImage: "arrow.up.circle.fill")
+                        .font(.system(size: 13, weight: .semibold))
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.regular)
+                .disabled(liveMode && (planner == nil || demo.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color(red: 0.08, green: 0.09, blue: 0.12))
+                .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(.white.opacity(0.14)))
+                .shadow(color: .black.opacity(0.4), radius: 12, y: 4)
+        )
+        .frame(maxWidth: 840)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity)
+        .background(FlowTheme.background)
+    }
+
+    private var branchLanesBar: some View {
+        let branches = store.projectContext?.branches ?? []
+        return ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(branches) { br in
+                    let activeSession = store.promptBranchSessions.first { $0.branchName == br.name }
+                    let isTarget = br.name == store.selectedTargetBranch
+                    Button {
+                        store.selectedTargetBranch = br.name
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: br.isMainBranch ? "shield.fill" : "arrow.triangle.branch")
+                                .font(.caption2)
+                                .foregroundStyle(isTarget ? FlowStatus.running.color : .secondary)
+                            Text(br.name).font(.caption.monospaced().weight(isTarget ? .semibold : .regular))
+                            if let s = activeSession {
+                                Text("· \(s.statusLabel): \(FlowText.clip(s.promptText, 24))")
+                                    .font(.caption2).foregroundStyle(.secondary)
+                            }
+                        }
+                        .padding(.horizontal, 8).padding(.vertical, 4)
+                        .background(Capsule().fill(isTarget ? FlowStatus.running.color.opacity(0.16) : .white.opacity(0.05)))
+                        .overlay(Capsule().stroke(isTarget ? FlowStatus.running.color.opacity(0.5) : .white.opacity(0.08)))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 14).padding(.vertical, 5)
+        }
+        .background(FlowTheme.background)
+    }
+
     private func runLive() {
         guard let planner else { showPlannerPicker = true; return }
         selectedNode = nil
         viewport.offsets = viewport.offsets.filter { $0.key == FlowLayout.pumpID }
+        store.recordPromptOnBranch(prompt: demo.prompt, branch: store.selectedTargetBranch, status: "Running", machines: workerPool.map(\.host))
         live.start(prompt: demo.prompt, planner: planner, workers: workerPool)
     }
 
@@ -334,12 +512,23 @@ struct FlowView: View {
         let projectName = URL(fileURLWithPath: store.projectFolderPath).lastPathComponent
         let chosen = agentRun.graph.nodes.filter { $0.status != .potential }.count
         let standby = agentRun.graph.nodes.filter { $0.status == .potential }.count
+        let counts = liveMode ? live.subagentCountsByHost : [:]
         return HStack(spacing: 10) {
             Label(projectName, systemImage: "folder.fill")
                 .font(.caption.weight(.semibold))
             Text("·").foregroundStyle(.secondary)
             Text("Chosen: \(chosen)").font(.caption.monospacedDigit()).foregroundStyle(FlowStatus.chosen.color)
             Text("Standby: \(standby)").font(.caption.monospacedDigit()).foregroundStyle(FlowStatus.potential.color)
+            if !counts.isEmpty {
+                Text("·").foregroundStyle(.secondary)
+                ForEach(counts.keys.sorted(), id: \.self) { host in
+                    HStack(spacing: 4) {
+                        Circle().fill(MachinePalette.color(for: host)).frame(width: 7, height: 7)
+                        Text("\(host): \(counts[host] ?? 0)")
+                            .font(.caption2.monospacedDigit())
+                    }
+                }
+            }
             Text("·").foregroundStyle(.secondary)
             Text("Tokens: \(agentRun.totalTokens.formatted())").font(.caption.monospacedDigit())
         }
@@ -378,6 +567,14 @@ struct FlowView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     if liveMode, live.canReassign(selectedNode), let id = selectedNode {
                         reassignMenu(id: id, current: a.worker)
+                    }
+                    if liveMode, selectedNode == "result", live.finalAnswer != nil {
+                        HStack(spacing: 8) {
+                            Button("Loop to Prompt") { loopResultToPrompt(executeImmediately: false) }
+                                .buttonStyle(.bordered).controlSize(.small)
+                            Button("Loop & Execute") { loopResultToPrompt(executeImmediately: true) }
+                                .buttonStyle(.borderedProminent).controlSize(.small)
+                        }
                     }
                     detailCard(title: a.node.title, status: a.node.status,
                                meta: "\(a.node.subtitle) · attempt \(a.attempt) · \(a.tokens.formatted()) tokens",
@@ -477,7 +674,9 @@ struct FlowView: View {
 
     private var agentRun: any AgentRunModel { liveMode ? live : demo }
 
-    private var chatModels: [FleetWorker] { WorkerPool.chatModels(store.orderedHosts) }
+    private var chatModels: [FleetWorker] {
+        WorkerPool.chatModels(store.orderedHosts, cloudServices: store.orderedCloudServices)
+    }
 
     /// The chosen planner if it's still available, else the default pick.
     private var planner: FleetWorker? {
@@ -510,13 +709,29 @@ struct FlowView: View {
 
 enum WorkerPool {
     static let nonChat = ["embed", "rerank", "whisper", "clip", "bge-", "minilm", "tts", "text_encoder"]
-    /// Models the planner picker suggests first: agentic and Nemotron models.
-    static let preferredPlanners = ["agentworld", "antigravity", "nemotron"]
+    /// Models the planner picker suggests first: Gemini (agy), agentic, and Nemotron models.
+    static let preferredPlanners = ["gemini-4-argon", "gemini-4-neon", "gemini-4-hydrogen", "gemini", "agentworld", "antigravity", "nemotron"]
 
-    /// Every chat-capable model on an online machine.
+    /// Every chat-capable model on an online machine or available cloud CLI.
     @MainActor
-    static func chatModels(_ hosts: [(HostConfig, HostState)]) -> [FleetWorker] {
+    static func chatModels(_ hosts: [(HostConfig, HostState)], cloudServices: [(CloudServicePlanConfig, CloudServiceSnapshot?)] = []) -> [FleetWorker] {
         var out: [FleetWorker] = []
+        for (cfg, snap) in cloudServices {
+            let execPath = cfg.executablePath
+            let models = snap?.discoveredModels ?? []
+            for m in models {
+                out.append(FleetWorker(
+                    model: m.id,
+                    host: cfg.id,
+                    kind: .openaiCompatible,
+                    base: URL(string: "https://cloud.fleet.local/\(cfg.id)")!,
+                    isLoaded: true,
+                    sizeBytes: nil,
+                    cloudProviderID: cfg.id,
+                    cloudExecutablePath: execPath.isEmpty ? nil : execPath
+                ))
+            }
+        }
         for (cfg, hs) in hosts where hs.reachability.isOnline {
             for (kind, m) in hs.allModels {
                 let lower = m.name.lowercased()
@@ -551,8 +766,12 @@ enum WorkerPool {
         return preferredPlanners.contains(where: lower.contains)
     }
 
-    /// The local machine's best model: a loaded agentic/Nemotron model, else any loaded one.
+    /// Default orchestrator/planner: Gemini (`agy`) first, then strongest loaded agentic/local model.
     static func defaultPlanner(_ models: [FleetWorker], localHost: String?) -> FleetWorker? {
+        if let gemini = models.first(where: { $0.host == "agy" && $0.model.lowercased().contains("argon") })
+            ?? models.first(where: { $0.host == "agy" && $0.model.lowercased().contains("gemini") }) {
+            return gemini
+        }
         let local = models.filter { $0.host == localHost }
         let pool = local.isEmpty ? models : local
         return pool.min { rank($0) < rank($1) }
@@ -589,7 +808,6 @@ struct PlannerPicker: View {
     var models: [FleetWorker]
     @Binding var selection: FleetWorker?
     @Binding var reviewPlan: Bool
-    @Binding var liveMode: Bool
     var isRunning: Bool
     @State private var host: String?
     @State private var filter = ""
@@ -622,12 +840,6 @@ struct PlannerPicker: View {
             }
             Divider()
             Toggle("Pause to review the plan before running it", isOn: $reviewPlan).font(.caption)
-            Picker("", selection: $liveMode) {
-                Text("Simulated").tag(false)
-                Text("Live").tag(true)
-            }
-            .pickerStyle(.segmented)
-            .disabled(isRunning)
         }
         .padding(16)
         .frame(width: 360)

@@ -35,6 +35,34 @@ enum FlowStatus: Equatable {
     var isActive: Bool { self == .running || self == .retrying }
 }
 
+enum MachinePalette {
+    static func color(for hostOrID: String) -> Color {
+        let key = hostOrID.lowercased().replacingOccurrences(of: "cloud-", with: "")
+        if key.contains("agy") || key.contains("gemini") {
+            return Color(red: 0.52, green: 0.42, blue: 1.00) // Gemini Electric Indigo
+        } else if key.contains("dgx") {
+            return Color(red: 0.30, green: 0.92, blue: 0.45) // DGX NVIDIA Emerald
+        } else if key.contains("jetson") || key.contains("thor") {
+            return Color(red: 0.12, green: 0.86, blue: 0.96) // Jetson Cyan/Teal
+        } else if key.contains("rtx") && !key.contains("legion") {
+            return Color(red: 1.00, green: 0.68, blue: 0.18) // Office RTX Amber/Gold
+        } else if key.contains("legion") || key.contains("laptop") {
+            return Color(red: 1.00, green: 0.44, blue: 0.30) // Legion Coral/Orange
+        } else if key.contains("macbook") {
+            return Color(red: 0.28, green: 0.65, blue: 1.00) // MacBook Sky Blue
+        } else if key.contains("studio") {
+            return Color(red: 0.92, green: 0.38, blue: 0.82) // Mac Studio Magenta
+        } else if key.contains("gb10") || key.contains("gx10") {
+            return Color(red: 0.25, green: 0.95, blue: 0.75) // GB10 Mint
+        } else if key.contains("codex") || key.contains("openai") {
+            return Color(red: 0.20, green: 0.88, blue: 0.68) // Codex Spring Green
+        } else if key.contains("claude") || key.contains("anthropic") {
+            return Color(red: 0.94, green: 0.56, blue: 0.36) // Claude Terracotta
+        }
+        return Color(red: 0.55, green: 0.62, blue: 0.75)
+    }
+}
+
 /// One block in the loop. Times share the graph's timebase (seconds).
 struct FlowNode: Identifiable, Equatable {
     var id: String
@@ -55,6 +83,15 @@ struct FlowNode: Identifiable, Equatable {
     var gpuLabel: String = ""
     var tokenLabel: String = ""
     var spendLabel: String = ""
+    var forkedSubagents: Int = 0
+
+    var hostKey: String {
+        if !machineID.isEmpty { return machineID }
+        if let atRange = subtitle.range(of: " @ ") {
+            return String(subtitle[atRange.upperBound...]).trimmingCharacters(in: .whitespaces)
+        }
+        return ""
+    }
 }
 
 struct FlowGraph: Equatable {
@@ -395,7 +432,9 @@ struct FlowCanvas<Popover: View>: View {
         let r = CGRect(x: r0.midX - r0.width * s / 2, y: r0.midY - r0.height * s / 2,
                        width: r0.width * s, height: r0.height * s)
         ctx.opacity = a * (node.status == .skipped ? 0.55 : 1)
-        let col = node.status.color
+        let machineColor = node.hostKey.isEmpty ? node.status.color : MachinePalette.color(for: node.hostKey)
+        let col = (node.status == .running || node.status == .retrying || node.status == .chosen || node.status == .done)
+            ? machineColor : node.status.color
         let shape = Path(roundedRect: r, cornerRadius: 14, style: .continuous)
         let selected = selection == node.id || hovering == node.id && selection == nil
 
@@ -442,8 +481,21 @@ struct FlowCanvas<Popover: View>: View {
         }
 
         let maxChars = Int(r.width / 8.2)
-        ctx.draw(Text(Self.clip(node.title, maxChars)).font(.system(size: 13, weight: .semibold)).foregroundColor(.white),
+        // Left machine-signature accent stripe
+        let stripe = Path(roundedRect: CGRect(x: r.minX + 2, y: r.minY + 10, width: 4, height: r.height - 20), cornerRadius: 2)
+        ctx.fill(stripe, with: .color(machineColor.opacity(node.status == .potential ? 0.5 : 0.95)))
+
+        ctx.draw(Text(Self.clip(node.title, maxChars - 4)).font(.system(size: 13, weight: .semibold)).foregroundColor(.white),
                  at: CGPoint(x: r.minX + 14, y: r.minY + 16), anchor: .leading)
+        if !node.hostKey.isEmpty {
+            let badgeText = node.forkedSubagents > 0 ? "\(node.forkedSubagents) sub" : "0 sub"
+            let pillW: CGFloat = 46
+            let pillR = CGRect(x: r.maxX - pillW - 10, y: r.minY + 8, width: pillW, height: 16)
+            ctx.fill(Path(roundedRect: pillR, cornerRadius: 8), with: .color(machineColor.opacity(0.22)))
+            ctx.stroke(Path(roundedRect: pillR, cornerRadius: 8), with: .color(machineColor.opacity(0.6)), lineWidth: 0.8)
+            ctx.draw(Text(badgeText).font(.system(size: 9, weight: .semibold, design: .monospaced)).foregroundColor(machineColor),
+                     at: CGPoint(x: pillR.midX, y: pillR.midY))
+        }
         ctx.draw(Text(Self.clip(node.subtitle, Int(r.width / 6.8)))
                     .font(.system(size: 11, design: .monospaced)).foregroundColor(.white.opacity(0.5)),
                  at: CGPoint(x: r.minX + 14, y: r.minY + 33), anchor: .leading)

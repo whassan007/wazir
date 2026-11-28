@@ -18,6 +18,8 @@ echo "Built $APP"
 for arg in "$@"; do
   case "$arg" in
     --install) rm -rf /Applications/Fleet.app && cp -R "$APP" /Applications/ && echo "Installed /Applications/Fleet.app" ;;
+    --new)
+      open -n "$APP" ;;
     --open)
       # `open` only re-activates an already-running instance, so quit any old build first.
       if pgrep -x Fleet >/dev/null; then

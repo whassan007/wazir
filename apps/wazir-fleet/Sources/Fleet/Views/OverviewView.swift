@@ -3,6 +3,7 @@ import SwiftUI
 
 struct OverviewView: View {
     @Environment(FleetStore.self) private var store
+    @State private var groupByMachine = false
 
     var body: some View {
         ScrollView {
@@ -43,9 +44,61 @@ struct OverviewView: View {
                             .onTapGesture { store.selection = .host(cfg.id) }
                     }
                 }
+                workloadRoutingSection
             }
             .padding(16)
         }
+    }
+
+    private var workloadRoutingSection: some View {
+        let engine = WorkloadFallbackChainEngine()
+        let onlineIDs = Set(store.orderedHosts.filter { $0.1.reachability.isOnline }.map(\.0.id))
+        let cloudIDs = Set(store.orderedCloudServices.filter { $0.1?.isAuthenticated == true }.map(\.0.id))
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Workload Fallback Chains").font(.headline)
+                Spacer()
+                Picker("Group", selection: $groupByMachine) {
+                    Text("By Activity").tag(false)
+                    Text("By Machine").tag(true)
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 220)
+            }
+            if groupByMachine {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 280), spacing: 10)], spacing: 10) {
+                    ForEach(engine.groupByMachine(), id: \.hostOrProviderID) { item in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(item.hostOrProviderID).font(.subheadline.weight(.semibold))
+                            ForEach(item.roles.prefix(4)) { role in
+                                Text("#\(role.rank) \(role.activity.rawValue)")
+                                    .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                            }
+                        }
+                        .padding(10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 8))
+                    }
+                }
+            } else {
+                ForEach(WorkloadFallbackChain.defaultChains) { chain in
+                    let resolved = engine.resolve(activity: chain.activity, onlineHostIDs: onlineIDs, authenticatedCloudIDs: cloudIDs)
+                    HStack(spacing: 8) {
+                        Text(chain.activity.rawValue).font(.caption.weight(.medium)).frame(width: 210, alignment: .leading)
+                        if let sel = resolved.selectedSlot {
+                            Chip(text: "#\(sel.rank) \(sel.displayName)", color: sel.rank == 1 ? .green : .orange)
+                        } else {
+                            Chip(text: "No online slot", color: .red)
+                        }
+                        Spacer()
+                        Text("\(resolved.fallbackQueue.count) fallbacks").font(.caption2).foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 3)
+                }
+            }
+        }
+        .padding(14)
+        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12))
     }
 
     private var summary: some View {

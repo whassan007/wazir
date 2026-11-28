@@ -11,9 +11,10 @@ struct PotentialMachineBox: Equatable, Sendable {
     var memoryFraction: Double?
     var gpuLabel: String
     var spendLabel: String
+    var forkedSubagents: Int = 0
 }
 
-/// A chat-capable model on an online machine.
+/// A chat-capable model on an online machine or frontier cloud CLI.
 struct FleetWorker: Equatable, Hashable, Sendable {
     var model: String
     var host: String
@@ -21,6 +22,9 @@ struct FleetWorker: Equatable, Hashable, Sendable {
     var base: URL
     var isLoaded: Bool
     var sizeBytes: Int64? = nil
+    var cloudProviderID: String? = nil
+    var cloudExecutablePath: String? = nil
+    var isCloud: Bool { cloudProviderID != nil }
     var label: String { "\(model) @ \(host)" }
 }
 
@@ -86,6 +90,8 @@ final class LiveAgentRun: AgentRunModel {
                      task: "Break the prompt into parallel subtasks", worker: planner)
             agents[0].node.status = .chosen
             agents[0].node.appearedAt = nil
+            agents[0].node.machineID = planner.host
+            agents[0].node.forkedSubagents = 1
         }
         for m in potentialMachines {
             let pid = "standby-\(m.id)"
@@ -104,7 +110,8 @@ final class LiveAgentRun: AgentRunModel {
                 memoryFraction: m.memoryFraction,
                 gpuLabel: m.gpuLabel,
                 tokenLabel: "0 tok",
-                spendLabel: m.spendLabel
+                spendLabel: m.spendLabel,
+                forkedSubagents: m.id == planner?.host ? 1 : 0
             )
             node.appearedAt = nil
             agents.append(Agent(node: node, task: "Standby candidate machine", duration: 0, tokenRate: 0))
@@ -134,6 +141,24 @@ final class LiveAgentRun: AgentRunModel {
     var totalTokens: Int { agents.reduce(0) { $0 + $1.tokens } }
     var retries: Int { agents.reduce(0) { $0 + $1.attempt - 1 } }
     func agent(_ id: String?) -> Agent? { agents.first { $0.node.id == id } }
+
+    var subagentCountsByHost: [String: Int] {
+        var counts: [String: Int] = [:]
+        for a in agents where a.node.id != "result" && !a.node.id.hasPrefix("standby-") {
+            let host = a.worker?.host ?? a.node.machineID
+            if !host.isEmpty { counts[host, default: 0] += 1 }
+        }
+        return counts
+    }
+
+    private func refreshForkedSubagentCounts() {
+        let counts = subagentCountsByHost
+        for i in agents.indices {
+            let host = agents[i].worker?.host ?? agents[i].node.machineID
+            agents[i].node.machineID = host
+            agents[i].node.forkedSubagents = counts[host] ?? 0
+        }
+    }
 
     func start(prompt: String, planner: FleetWorker, workers: [FleetWorker]) {
         stop()
@@ -173,13 +198,15 @@ final class LiveAgentRun: AgentRunModel {
 
     private func run(goal: String, planner lead: FleetWorker, workers pool: [FleetWorker]) async {
         let workers = pool.isEmpty ? [lead] : pool
-        let critic = workers.first { $0.host != lead.host } ?? workers.first { $0 != lead } ?? lead
+        let critic = Self.selectBestCritic(from: workers, planner: lead)
+        let synthesizer = Self.selectBestSynthesizer(from: workers, planner: lead)
 
         addAgent(id: "planner", title: "Planner", wave: 0, deps: [], task: "Break the prompt into parallel subtasks",
                  worker: lead)
+        refreshForkedSubagentCounts()
         let maxSubtasks = min(5, max(3, workers.count))
         guard let planText = await execute("planner", AgentPrompts.planner(goal: goal, maxSubtasks: maxSubtasks),
-                                           budget: 3072, workers: [lead] + workers) else {
+                                           budget: 4096, workers: [lead] + workers) else {
             problem = "The planner failed, so the run stopped."
             return
         }
@@ -202,11 +229,12 @@ final class LiveAgentRun: AgentRunModel {
                      worker: rotation[i % rotation.count])
         }
         addAgent(id: "synth", title: "Synthesizer", wave: 2, deps: ids, task: "Merge the findings into a draft",
-                 worker: lead)
+                 worker: synthesizer)
         addAgent(id: "critic", title: "Critic", wave: 3, deps: ["synth"], task: "Check the draft and fix gaps and errors",
                  worker: critic)
         addAgent(id: "result", title: "Result", wave: 4, deps: ["critic"], task: "Final answer",
                  worker: nil)
+        refreshForkedSubagentCounts()
 
         if reviewPlan {
             stage = .review
@@ -235,12 +263,12 @@ final class LiveAgentRun: AgentRunModel {
         guard !findings.isEmpty else { problem = "Every worker failed, so there was nothing to synthesize."; return }
 
         guard let draft = await execute("synth", AgentPrompts.synthesizer(goal: goal, findings: findings),
-                                        budget: 3072, workers: workers) else {
+                                        budget: 4096, workers: workers) else {
             problem = "The synthesizer failed."
             return
         }
         let answer = await execute("critic", AgentPrompts.critic(goal: goal, draft: draft),
-                                   budget: 3072, workers: workers) ?? draft
+                                   budget: 4096, workers: workers) ?? draft
         guard !Task.isCancelled else { return }
         update("result") {
             $0.node.status = .done
@@ -254,17 +282,21 @@ final class LiveAgentRun: AgentRunModel {
         finalAnswer = answer
     }
 
-    /// Runs one agent with a single failover to a model on another machine. Returns the
-    /// answer text, or nil if both attempts failed or the run was cancelled.
+    /// Runs one agent with up to 4-hop failover along the fleet/workload fallback chain.
+    /// Returns the answer text, or nil if all attempts failed or the run was cancelled.
     private func execute(_ id: String, _ messages: [ChatMessage], budget: Int,
                          workers: [FleetWorker]) async -> String? {
         guard var worker = agent(id)?.worker else { return nil }
-        for attempt in 1...2 {
+        var tried: [FleetWorker] = []
+        let maxAttempts = min(4, max(2, workers.count))
+        for attempt in 1...maxAttempts {
             if Task.isCancelled { return nil }
+            tried.append(worker)
             update(id) {
                 $0.attempt = attempt
                 $0.worker = worker
                 $0.node.subtitle = worker.label
+                $0.node.machineID = worker.host
                 $0.node.status = attempt == 1 ? .running : .retrying
                 $0.node.startedAt = $0.node.startedAt ?? time
                 $0.node.progress = 0
@@ -272,30 +304,71 @@ final class LiveAgentRun: AgentRunModel {
                 $0.output = ""
                 $0.log.append(stamp(attempt == 1 ? "started on \(worker.label)" : "retrying on \(worker.label)"))
             }
+            refreshForkedSubagentCounts()
             let began = Date()
             do {
                 var content = "", sawUsage = false, chunks = 0, lastPaint = Date.distantPast
-                for try await event in client.stream(base: worker.base, model: worker.model, messages: messages,
-                                                     maxTokens: budget) {
-                    switch event {
-                    case .content(let s): content += s; chunks += 1
-                    case .reasoning: chunks += 1
-                    case .usage(_, let completion): sawUsage = true; chunks = completion
+                if let execPath = worker.cloudExecutablePath, let provider = worker.cloudProviderID {
+                    let combinedPrompt = messages.map(\.content).joined(separator: "\n\n")
+                    let args: [String] = switch provider {
+                    case "claude": ["-p", combinedPrompt, "--model", worker.model]
+                    case "codex": ["exec", combinedPrompt]
+                    default: ["-p", combinedPrompt]
                     }
-                    // Repaint at most ~15×/s; token streams can be much faster.
-                    if Date().timeIntervalSince(lastPaint) > 0.066 || sawUsage {
-                        lastPaint = Date()
-                        let n = chunks, text = content
-                        update(id) {
-                            $0.tokens = n
-                            $0.output = text
-                            $0.node.progress = min(0.95, Double(n) / Double(budget))
-                            $0.node.detail = "\(n) tok"
+                    if FileManager.default.isExecutableFile(atPath: execPath) {
+                        for try await item in ProcessRunner.stream(execPath, args, timeout: 90) {
+                            if case .stdout(let line) = item {
+                                content += line + "\n"
+                                chunks += max(1, line.split(whereSeparator: \.isWhitespace).count)
+                                if Date().timeIntervalSince(lastPaint) > 0.066 {
+                                    lastPaint = Date()
+                                    let n = chunks, text = content
+                                    update(id) {
+                                        $0.tokens = n
+                                        $0.output = text
+                                        $0.node.progress = min(0.95, Double(n) / Double(budget))
+                                        $0.node.detail = "\(n) tok"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        throw FleetError("Cloud CLI \(provider) returned no output; failing over to fleet model")
+                    }
+                } else {
+                    for try await event in client.stream(base: worker.base, model: worker.model, messages: messages,
+                                                         maxTokens: budget) {
+                        switch event {
+                        case .content(let s): content += s; chunks += 1
+                        case .reasoning: chunks += 1
+                        case .usage(_, let completion): sawUsage = true; chunks = completion
+                        }
+                        // Repaint at most ~15×/s; token streams can be much faster.
+                        if Date().timeIntervalSince(lastPaint) > 0.066 || sawUsage {
+                            lastPaint = Date()
+                            let n = chunks, text = content
+                            update(id) {
+                                $0.tokens = n
+                                $0.output = text
+                                $0.node.progress = min(0.95, Double(n) / Double(budget))
+                                $0.node.detail = "\(n) tok"
+                            }
                         }
                     }
                 }
-                let answer = ChatStreamParser.stripThinking(content)
-                if answer.isEmpty { throw FleetError("Model returned no answer text (token budget used up by reasoning?)") }
+                var answer = ChatStreamParser.stripThinking(content)
+                if answer.isEmpty {
+                    let salvaged = content
+                        .replacingOccurrences(of: "<think>", with: "")
+                        .replacingOccurrences(of: "</think>", with: "")
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !salvaged.isEmpty {
+                        answer = salvaged
+                    } else {
+                        throw FleetError("Model returned no answer text (token budget used up by reasoning?)")
+                    }
+                }
                 let secs = max(0.1, Date().timeIntervalSince(began))
                 let n = chunks
                 update(id) {
@@ -317,7 +390,7 @@ final class LiveAgentRun: AgentRunModel {
                     $0.failedAt = time
                     $0.log.append(stamp("failed: \(message)"))
                 }
-                guard attempt == 1, let next = failover(from: worker, in: workers) else { break }
+                guard attempt < maxAttempts, let next = failover(from: worker, excluding: tried, in: workers, forAgentID: id) else { break }
                 try? await Task.sleep(for: .seconds(1.2))
                 worker = next
             }
@@ -326,9 +399,48 @@ final class LiveAgentRun: AgentRunModel {
         return nil
     }
 
-    /// Prefers a model on a different machine, then a different model on the same one.
-    private func failover(from w: FleetWorker, in workers: [FleetWorker]) -> FleetWorker? {
-        workers.first { $0.host != w.host } ?? workers.first { $0 != w }
+    /// Prefers an untried strong model on a different machine, then an untried model on the same one.
+    /// For Critic/Synthesizer/Planner, avoids weak/unloaded macbook models when stronger fleet models exist.
+    private func failover(from w: FleetWorker, excluding tried: [FleetWorker], in workers: [FleetWorker], forAgentID id: String) -> FleetWorker? {
+        let untried = workers.filter { !tried.contains($0) }
+        if id == "critic" || id == "synth" || id == "planner" {
+            let sorted = untried.sorted { Self.criticScore($0) > Self.criticScore($1) }
+            return sorted.first { $0.host != w.host } ?? sorted.first
+        }
+        return untried.first { $0.host != w.host } ?? untried.first
+    }
+
+    static func selectBestCritic(from workers: [FleetWorker], planner: FleetWorker) -> FleetWorker {
+        let nonPlanner = workers.filter { $0 != planner }
+        let pool = nonPlanner.isEmpty ? workers : nonPlanner
+        return pool.max { criticScore($0) < criticScore($1) } ?? planner
+    }
+
+    static func selectBestSynthesizer(from workers: [FleetWorker], planner: FleetWorker) -> FleetWorker {
+        let pool = workers.isEmpty ? [planner] : workers
+        return pool.max { criticScore($0) < criticScore($1) } ?? planner
+    }
+
+    static func criticScore(_ w: FleetWorker) -> Int {
+        var score = 0
+        let h = w.host.lowercased()
+        let m = w.model.lowercased()
+        if w.isLoaded { score += 40 }
+        if h.contains("dgx") { score += 50 }
+        else if h.contains("jetson") { score += 42 }
+        else if h.contains("rtx") && !h.contains("legion") { score += 35 }
+        else if h.contains("claude") || h.contains("agy") || h.contains("codex") { score += 32 }
+        else if h.contains("studio") { score += 30 }
+        else if h.contains("macbook") { score -= 30 } // Avoid small/unloaded macbook models for Critic/Synthesizer
+
+        if m.contains("gpt-oss-120b") || m.contains("qwen3-coder-next") || m.contains("opus") || m.contains("argon") || m.contains("neon") || m.contains("astra") {
+            score += 45
+        } else if m.contains("35b") || m.contains("30b") || m.contains("70b") || m.contains("72b") || m.contains("sonnet") || m.contains("20b") {
+            score += 25
+        } else if m.contains("7b") || m.contains("8b") || m.contains("9b") || m.contains("4b") {
+            score -= 15
+        }
+        return score
     }
 
     // MARK: State helpers

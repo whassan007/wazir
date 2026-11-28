@@ -200,12 +200,16 @@ public struct CLIAgentAdapter: InferenceAdapter {
         return AsyncThrowingStream { continuation in
             let task = Task {
                 do {
+                    var stderrLines: [String] = []
                     for try await item in ProcessRunner.stream(executablePath, args, timeout: 300) {
                         switch item {
                         case .stdout(let line): continuation.yield(.content(line + "\n"))
-                        case .stderr: break
+                        case .stderr(let err): stderrLines.append(err)
                         case .exit(let code):
-                            if code != 0 { throw FleetError("\(adapterID) exited with code \(code)") }
+                            if code != 0 {
+                                let detail = stderrLines.suffix(6).joined(separator: " | ")
+                                throw FleetError("\(adapterID) exited with code \(code)\(detail.isEmpty ? "" : ": \(detail)")")
+                            }
                         }
                     }
                     continuation.finish()

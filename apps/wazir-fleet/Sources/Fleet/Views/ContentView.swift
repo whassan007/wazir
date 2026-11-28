@@ -39,6 +39,10 @@ struct ContentView: View {
         .sheet(item: $store.pendingPlan) { plan in
             PlanSheet(plan: plan)
         }
+        .sheet(isPresented: $store.showPromptComposer) {
+            PromptComposerView().environment(store).frame(width: 760, height: 580)
+        }
+        .navigationTitle("Fleet — \(URL(fileURLWithPath: store.projectFolderPath).lastPathComponent) [\(store.selectedTargetBranch)]")
     }
 
     @ViewBuilder private var detail: some View {
@@ -62,6 +66,7 @@ struct ProjectHeaderBar: View {
     @Environment(FleetStore.self) private var store
 
     var body: some View {
+        @Bindable var store = store
         let name = URL(fileURLWithPath: store.projectFolderPath).lastPathComponent
         HStack(spacing: 10) {
             Image(systemName: "folder.fill.badge.gearshape")
@@ -74,7 +79,15 @@ struct ProjectHeaderBar: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
             if let ctx = store.projectContext {
-                Chip(text: ctx.gitBranch, color: .green, systemImage: "arrow.triangle.branch")
+                Button {
+                    store.showBranchesPopover = true
+                } label: {
+                    Chip(text: "\(store.selectedTargetBranch) (\(ctx.branches.count))", color: .green, systemImage: "arrow.triangle.branch")
+                }
+                .buttonStyle(.plain)
+                .popover(isPresented: $store.showBranchesPopover, arrowEdge: .bottom) {
+                    RepoBranchesPopoverView().environment(store)
+                }
                 Chip(text: ctx.detectedBuildSystem.rawValue, color: .blue)
                 Chip(text: "\(ctx.trackedFiles.count) files · \(ctx.dirtyHumanFiles.count) modified", color: .secondary)
             }
@@ -95,10 +108,99 @@ struct ProjectHeaderBar: View {
                 Label("Load Project Folder…", systemImage: "folder.badge.plus")
             }
             .controlSize(.small)
+            Menu {
+                Button("Choose Project Folder…") {
+                    store.promptAndLaunchNewInstance()
+                }
+                if !store.discoveredCodeProjects.isEmpty {
+                    Divider()
+                    ForEach(store.discoveredCodeProjects, id: \.self) { path in
+                        Button("Open \(URL(fileURLWithPath: path).lastPathComponent)") {
+                            store.launchNewInstance(forProjectPath: path)
+                        }
+                    }
+                }
+            } label: {
+                Label("New Instance…", systemImage: "plus.square.on.square")
+            }
+            .controlSize(.small)
+            Button {
+                store.showPromptComposer = true
+            } label: {
+                Label("AI Prompt Studio…", systemImage: "sparkles")
+            }
+            .controlSize(.small)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
         .background(.bar)
+    }
+}
+
+struct RepoBranchesPopoverView: View {
+    @Environment(FleetStore.self) private var store
+    @State private var newBranchName = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Repository Branches & Active Prompts").font(.headline)
+            let branches = store.projectContext?.branches ?? []
+            if branches.isEmpty {
+                Text("No local git branches discovered.").font(.caption).foregroundStyle(.secondary)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(branches) { br in
+                            let sessions = store.promptBranchSessions.filter { $0.branchName == br.name }
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack {
+                                    Image(systemName: br.isMainBranch ? "shield.fill" : "arrow.triangle.branch")
+                                        .foregroundStyle(br.isCurrent ? .green : .secondary)
+                                    Text(br.name).font(.callout.monospaced().weight(.semibold))
+                                    if br.isCurrent { Chip(text: "HEAD", color: .green) }
+                                    if br.name == store.selectedTargetBranch { Chip(text: "target", color: .blue) }
+                                    Spacer()
+                                    Text(br.shortSHA).font(.caption2.monospaced()).foregroundStyle(.secondary)
+                                    Button("Target") { store.selectedTargetBranch = br.name }
+                                        .controlSize(.mini)
+                                }
+                                if !br.subject.isEmpty {
+                                    Text(br.subject).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                }
+                                ForEach(sessions) { s in
+                                    HStack(spacing: 6) {
+                                        Chip(text: s.statusLabel, color: s.statusLabel == "Running" ? .blue : .green)
+                                        Text(s.promptText).font(.caption).lineLimit(1)
+                                        Spacer()
+                                        if !s.assignedMachines.isEmpty {
+                                            Text(s.assignedMachines.joined(separator: ", ")).font(.caption2.monospaced()).foregroundStyle(.secondary)
+                                        }
+                                    }
+                                    .padding(.leading, 18)
+                                }
+                            }
+                            .padding(8)
+                            .background(.background.secondary, in: RoundedRectangle(cornerRadius: 8))
+                        }
+                    }
+                }
+                .frame(maxHeight: 260)
+            }
+            Divider()
+            HStack {
+                TextField("New branch for next prompt…", text: $newBranchName)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.caption.monospaced())
+                Button("Create & Target") {
+                    store.createAndSelectBranch(newBranchName)
+                    newBranchName = ""
+                }
+                .controlSize(.small)
+                .disabled(newBranchName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(14)
+        .frame(width: 460)
     }
 }
 

@@ -11,6 +11,7 @@ struct VisualOrchestrationStudioView: View {
     @State private var selectedMachineID: String?
     @State private var participatingMachines: [String] = []
     @State private var selectionModes: [String: String] = [:] // machineID -> AUTO / PREFERRED / PINNED
+    @State private var validationMessage: String?
 
     enum StudioViewMode: String, CaseIterable {
         case logical = "Logical Workflow"
@@ -36,11 +37,23 @@ struct VisualOrchestrationStudioView: View {
                 .pickerStyle(.segmented)
                 .frame(width: 240)
                 Spacer()
-                Button("Validate") {}
-                Button("Run") {}.buttonStyle(.borderedProminent)
+                Button("Validate") {
+                    let online = participatingMachines.filter { id in
+                        store.state.hosts[id]?.reachability.isOnline == true
+                    }
+                    validationMessage = participatingMachines.isEmpty
+                        ? "Add at least one machine from the Resource Inventory."
+                        : "Validated \(participatingMachines.count) machine(s) (\(online.count) online) for \(URL(fileURLWithPath: store.projectFolderPath).lastPathComponent)."
+                }
+                Button("Run") {
+                    store.selection = .flow
+                }.buttonStyle(.borderedProminent)
             }
             .padding(10)
             .background(.bar)
+            if let validationMessage {
+                Banner(kind: .info, text: validationMessage)
+            }
 
             Divider()
 
@@ -75,10 +88,6 @@ struct VisualOrchestrationStudioView: View {
                     }
                     .padding(.horizontal, 12).padding(.top, 8)
 
-                    TextField("Project Objective", text: $objectiveText)
-                        .textFieldStyle(.roundedBorder)
-                        .padding(.horizontal, 12)
-
                     if participatingMachines.isEmpty {
                         ContentUnavailableView(
                             "Add Physical Machines to Canvas",
@@ -94,6 +103,13 @@ struct VisualOrchestrationStudioView: View {
                                             Text(id).font(.headline)
                                             Spacer()
                                             Chip(text: selectionModes[id] ?? "AUTO", color: .blue)
+                                            Button {
+                                                participatingMachines.removeAll { $0 == id }
+                                                if selectedMachineID == id { selectedMachineID = participatingMachines.first }
+                                            } label: {
+                                                Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                                            }
+                                            .buttonStyle(.borderless)
                                         }
                                         Text(zoomLevel < 0.65 ? "Stage Group" : (zoomLevel > 1.35 ? "Slots & Agents" : "Machine & Models"))
                                             .font(.caption).foregroundStyle(.secondary)
@@ -107,6 +123,33 @@ struct VisualOrchestrationStudioView: View {
                         }
                     }
                     Spacer()
+                    // Bottom Gemini/Claude-Style Prompt Composer Bar
+                    VStack(spacing: 8) {
+                        TextField("Describe your project objective for \(URL(fileURLWithPath: store.projectFolderPath).lastPathComponent)…",
+                                  text: Binding(get: { store.activePromptText }, set: { store.activePromptText = $0 }),
+                                  axis: .vertical)
+                            .lineLimit(1...4)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 14))
+                        HStack {
+                            Button { store.showPromptComposer = true } label: {
+                                Label("Craft with AI", systemImage: "sparkles")
+                            }
+                            .buttonStyle(.bordered).controlSize(.small)
+                            Spacer()
+                            Button {
+                                store.selection = .flow
+                            } label: {
+                                Label("Run in Flow", systemImage: "arrow.up.circle.fill")
+                            }
+                            .buttonStyle(.borderedProminent).controlSize(.small)
+                        }
+                    }
+                    .padding(12)
+                    .background(RoundedRectangle(cornerRadius: 14).fill(.background.secondary))
+                    .overlay(RoundedRectangle(cornerRadius: 14).stroke(.secondary.opacity(0.25)))
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 12)
                 }
                 .frame(minWidth: 420, maxWidth: .infinity)
 
@@ -128,6 +171,33 @@ struct VisualOrchestrationStudioView: View {
                         Text("Select a machine or node on the canvas.").font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer()
+                    // Bottom Gemini/Claude-Style Prompt Composer Bar
+                    VStack(spacing: 8) {
+                        TextField("Describe your project objective for \(URL(fileURLWithPath: store.projectFolderPath).lastPathComponent)…",
+                                  text: Binding(get: { store.activePromptText }, set: { store.activePromptText = $0 }),
+                                  axis: .vertical)
+                            .lineLimit(1...4)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 14))
+                        HStack {
+                            Button { store.showPromptComposer = true } label: {
+                                Label("Craft with AI", systemImage: "sparkles")
+                            }
+                            .buttonStyle(.bordered).controlSize(.small)
+                            Spacer()
+                            Button {
+                                store.selection = .flow
+                            } label: {
+                                Label("Run in Flow", systemImage: "arrow.up.circle.fill")
+                            }
+                            .buttonStyle(.borderedProminent).controlSize(.small)
+                        }
+                    }
+                    .padding(12)
+                    .background(RoundedRectangle(cornerRadius: 14).fill(.background.secondary))
+                    .overlay(RoundedRectangle(cornerRadius: 14).stroke(.secondary.opacity(0.25)))
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 12)
                 }
                 .padding(12)
                 .frame(minWidth: 220, maxWidth: 260)

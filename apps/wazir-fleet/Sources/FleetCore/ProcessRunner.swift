@@ -16,9 +16,17 @@ public enum ProcessRunner {
             let process = box.process
             process.executableURL = URL(fileURLWithPath: executable)
             process.arguments = arguments
-            if let environment {
-                process.environment = ProcessInfo.processInfo.environment.merging(environment) { _, new in new }
+            let standardPATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:\(NSHomeDirectory())/.local/bin"
+            var mergedEnv = ProcessInfo.processInfo.environment
+            if let existing = mergedEnv["PATH"], !existing.isEmpty {
+                mergedEnv["PATH"] = "\(standardPATH):\(existing)"
+            } else {
+                mergedEnv["PATH"] = standardPATH
             }
+            if let environment {
+                mergedEnv = mergedEnv.merging(environment) { _, new in new }
+            }
+            process.environment = mergedEnv
             process.standardInput = FileHandle.nullDevice
             let out = Pipe(), err = Pipe()
             process.standardOutput = out

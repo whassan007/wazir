@@ -18,6 +18,16 @@ struct CommandMessage: Equatable {
     var text: String
 }
 
+struct PromptBranchSession: Identifiable, Equatable, Sendable {
+    var id: UUID = UUID()
+    var promptText: String
+    var branchName: String
+    var repoName: String
+    var statusLabel: String
+    var assignedMachines: [String]
+    var updatedAt: Date = Date()
+}
+
 /// Main-actor app state. All mutations of `state` go through `send(_:)` → `FleetReducer`;
 /// all network/SSH work happens off the main actor and reports back via events.
 @MainActor
@@ -35,12 +45,18 @@ final class FleetStore {
     var commandText = ""
     var commandMessage: CommandMessage?
     var pendingPlan: ExecutionPlan?
+    var activePromptText: String = "Write a market analysis of EV charging in Europe"
+    var showPromptComposer: Bool = false
+    var flowLiveMode: Bool = true
+    var selectedTargetBranch: String = "main"
+    var promptBranchSessions: [PromptBranchSession] = []
+    var showBranchesPopover: Bool = false
     private(set) var isCheckingRegistry = false
     private(set) var history: [String] = []
     private(set) var lastFullRefresh: Date?
 
-    var projectFolderPath: String = UserDefaults.standard.string(forKey: "FleetActiveProjectPath")
-        ?? FileManager.default.currentDirectoryPath
+    var projectFolderPath: String
+    let isDedicatedProjectInstance: Bool
     private(set) var projectContext: ProjectRepositoryContext?
     private(set) var discoveredCodeProjects: [String] = []
 
@@ -51,7 +67,27 @@ final class FleetStore {
     private var started = false
     private var wakeObserver: NSObjectProtocol?
 
+    static func parseCLIProjectPath(from args: [String] = CommandLine.arguments) -> String? {
+        for (idx, arg) in args.enumerated() {
+            if arg == "--project", idx + 1 < args.count {
+                return args[idx + 1]
+            }
+            if arg.hasPrefix("--project=") {
+                return String(arg.dropFirst("--project=".count))
+            }
+        }
+        return nil
+    }
+
     init() {
+        if let cliPath = Self.parseCLIProjectPath() {
+            self.projectFolderPath = cliPath
+            self.isDedicatedProjectInstance = true
+        } else {
+            self.projectFolderPath = UserDefaults.standard.string(forKey: "FleetActiveProjectPath")
+                ?? FileManager.default.currentDirectoryPath
+            self.isDedicatedProjectInstance = false
+        }
         Task { @MainActor in self.start() }
     }
 
@@ -358,7 +394,39 @@ final class FleetStore {
         }
         Task {
             let ctx = try? await RepositoryIntrospector().introspect(repoPath: path, coordinator: nil)
-            await MainActor.run { self.projectContext = ctx }
+            await MainActor.run {
+                self.projectContext = ctx
+                if let br = ctx?.gitBranch, !br.isEmpty {
+                    self.selectedTargetBranch = br
+                }
+            }
+        }
+    }
+
+    func recordPromptOnBranch(prompt: String, branch: String? = nil, status: String, machines: [String] = []) {
+        let br = branch ?? selectedTargetBranch
+        let repoName = URL(fileURLWithPath: projectFolderPath).lastPathComponent
+        if let idx = promptBranchSessions.firstIndex(where: { $0.branchName == br && $0.repoName == repoName }) {
+            promptBranchSessions[idx].promptText = prompt
+            promptBranchSessions[idx].statusLabel = status
+            promptBranchSessions[idx].assignedMachines = machines
+            promptBranchSessions[idx].updatedAt = Date()
+        } else {
+            promptBranchSessions.insert(
+                PromptBranchSession(promptText: prompt, branchName: br, repoName: repoName,
+                                    statusLabel: status, assignedMachines: machines),
+                at: 0
+            )
+        }
+    }
+
+    func createAndSelectBranch(_ name: String) {
+        let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return }
+        selectedTargetBranch = clean
+        if var ctx = projectContext, !ctx.branches.contains(where: { $0.name == clean }) {
+            ctx.branches.append(RepoBranchInfo(name: clean, isCurrent: false, shortSHA: "new", subject: "Target branch for next prompt"))
+            projectContext = ctx
         }
     }
 
@@ -372,6 +440,30 @@ final class FleetStore {
         panel.directoryURL = URL(fileURLWithPath: projectFolderPath)
         if panel.runModal() == .OK, let url = panel.url {
             loadProjectFolder(path: url.path)
+        }
+    }
+
+    func launchNewInstance(forProjectPath path: String) {
+        let bundleURL = Bundle.main.bundleURL
+        let appPath = bundleURL.pathExtension == "app"
+            ? bundleURL.path
+            : "/Users/wael/Code/Fleet/build/Fleet.app"
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        task.arguments = ["-n", appPath, "--args", "--project", path]
+        try? task.run()
+    }
+
+    func promptAndLaunchNewInstance() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Open New Fleet Instance"
+        panel.message = "Select a project folder to open in a new independent Fleet instance"
+        panel.directoryURL = URL(fileURLWithPath: projectFolderPath).deletingLastPathComponent()
+        if panel.runModal() == .OK, let url = panel.url {
+            launchNewInstance(forProjectPath: url.path)
         }
     }
 
