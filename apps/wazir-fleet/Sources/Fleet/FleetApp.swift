@@ -18,7 +18,7 @@ struct FleetApp: App {
     @State private var store = FleetStore()
 
     var body: some Scene {
-        Window("Fleet", id: "main") {
+        Window("Wazir Fleet", id: "main") {
             ContentView()
                 .environment(store)
                 .frame(minWidth: 960, minHeight: 600)
