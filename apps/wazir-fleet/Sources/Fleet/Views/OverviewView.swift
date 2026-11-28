@@ -8,6 +8,31 @@ struct OverviewView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 summary
+                if !store.orderedCloudServices.isEmpty {
+                    HStack {
+                        Text("Frontier Cloud Services & Budgets").font(.headline)
+                        Spacer()
+                        Button("Manage Plans & Login") { store.selection = .cloudServices }
+                            .buttonStyle(.borderless).font(.caption)
+                    }
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 280), spacing: 12)], spacing: 12) {
+                        ForEach(store.orderedCloudServices, id: \.0.id) { cfg, snap in
+                            VStack(alignment: .leading, spacing: 6) {
+                                HStack {
+                                    StatusDot(color: (snap?.isAuthenticated ?? false) ? .green : .orange)
+                                    Text(cfg.displayName).font(.subheadline.weight(.semibold))
+                                    Spacer()
+                                    Text("$\(Int(cfg.totalBudgetCeilingUSD))").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                                }
+                                Text("\(snap?.discoveredModels.count ?? 0) frontier models · \(cfg.planName)")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            .padding(10)
+                            .background(.background.secondary, in: RoundedRectangle(cornerRadius: 10))
+                            .onTapGesture { store.selection = .cloudServices }
+                        }
+                    }
+                }
                 if let ts = store.state.tailscaleError {
                     Label("Tailscale status unavailable: \(ts)", systemImage: "network.slash")
                         .font(.caption).foregroundStyle(.orange)

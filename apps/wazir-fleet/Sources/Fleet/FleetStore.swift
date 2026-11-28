@@ -5,8 +5,10 @@ import Observation
 
 enum SidebarItem: Hashable {
     case overview
+    case cloudServices
     case activity
     case flow
+    case studio
     case host(String)
 }
 
@@ -37,6 +39,11 @@ final class FleetStore {
     private(set) var history: [String] = []
     private(set) var lastFullRefresh: Date?
 
+    var projectFolderPath: String = UserDefaults.standard.string(forKey: "FleetActiveProjectPath")
+        ?? FileManager.default.currentDirectoryPath
+    private(set) var projectContext: ProjectRepositoryContext?
+    private(set) var discoveredCodeProjects: [String] = []
+
     let configStore = ConfigStore()
     private var pollTask: Task<Void, Never>?
     private var inflight: Set<String> = []
@@ -54,6 +61,7 @@ final class FleetStore {
         guard !started else { return }
         started = true
         loadConfig()
+        loadProjectFolder(path: projectFolderPath)
         restartPolling()
         wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
@@ -112,8 +120,13 @@ final class FleetStore {
 
     func refreshAll() async {
         let ids = state.hostOrder
+        let cloudConfigs = config.cloudServices
         await withTaskGroup(of: Void.self) { group in
             group.addTask { await self.refreshTailscale() }
+            group.addTask {
+                let snaps = CloudServiceBudgetEngine().discoverAll(configs: cloudConfigs)
+                await MainActor.run { self.send(.cloudServicesUpdated(snaps, at: Date())) }
+            }
             for id in ids { group.addTask { await self.refresh(id) } }
         }
         lastFullRefresh = Date()
@@ -330,6 +343,73 @@ final class FleetStore {
         state.hostOrder.compactMap { id in
             guard let c = config.host(id: id), let s = state.hosts[id] else { return nil }
             return (c, s)
+        }
+    }
+
+    func loadProjectFolder(path: String) {
+        projectFolderPath = path
+        UserDefaults.standard.set(path, forKey: "FleetActiveProjectPath")
+        let codeDir = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Code")
+        if let items = try? FileManager.default.contentsOfDirectory(at: codeDir, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]) {
+            discoveredCodeProjects = items
+                .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
+                .map(\.path)
+                .sorted()
+        }
+        Task {
+            let ctx = try? await RepositoryIntrospector().introspect(repoPath: path, coordinator: nil)
+            await MainActor.run { self.projectContext = ctx }
+        }
+    }
+
+    func promptForProjectFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Load Project Folder"
+        panel.message = "Select the project repository folder Fleet should operate in"
+        panel.directoryURL = URL(fileURLWithPath: projectFolderPath)
+        if panel.runModal() == .OK, let url = panel.url {
+            loadProjectFolder(path: url.path)
+        }
+    }
+
+    var orderedCloudServices: [(CloudServicePlanConfig, CloudServiceSnapshot?)] {
+        config.cloudServices.map { ($0, state.cloudSnapshots[$0.id]) }
+    }
+
+    var allFrontierCloudModels: [FrontierCloudModel] {
+        config.cloudServices.flatMap { state.cloudSnapshots[$0.id]?.discoveredModels ?? [] }
+    }
+
+    func openCloudWebLogin(_ service: CloudServicePlanConfig) {
+        if let url = URL(string: service.webLoginURL) { NSWorkspace.shared.open(url) }
+    }
+
+    func openCloudBillingPortal(_ service: CloudServicePlanConfig) {
+        if let url = URL(string: service.billingURL) { NSWorkspace.shared.open(url) }
+    }
+
+    func revealCloudConfigFile(_ service: CloudServicePlanConfig) {
+        let engine = CloudServiceBudgetEngine()
+        for raw in service.configPaths {
+            let p = engine.expand(raw)
+            if FileManager.default.fileExists(atPath: p) {
+                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: p)])
+                return
+            }
+        }
+    }
+
+    func updateCloudBudget(id: String, monthlyPlanUSD: Double, additionalLimitUSD: Double) {
+        var next = config
+        if let idx = next.cloudServices.firstIndex(where: { $0.id == id }) {
+            next.cloudServices[idx].monthlyPlanBudgetUSD = max(0, monthlyPlanUSD)
+            next.cloudServices[idx].additionalSpendLimitUSD = max(0, additionalLimitUSD)
+            try? apply(config: next)
+            let snaps = CloudServiceBudgetEngine().discoverAll(configs: next.cloudServices)
+            send(.cloudServicesUpdated(snaps, at: Date()))
         }
     }
 

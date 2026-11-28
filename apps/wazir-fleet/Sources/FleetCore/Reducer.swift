@@ -98,6 +98,11 @@ public enum FleetReducer {
 
         case .clearFinishedOperations:
             state.operations.removeAll { $0.phase.isTerminal }
+
+        case .cloudServicesUpdated(let snapshots, _):
+            for snap in snapshots {
+                state.cloudSnapshots[snap.id] = snap
+            }
         }
     }
 

@@ -290,10 +290,13 @@ public struct FleetConfig: Codable, Sendable, Hashable {
     public var registryLookup: Bool
     /// Pulls above this size get a "large download" warning.
     public var largeDownloadWarningGB: Double
+    /// Configured cloud AI service plans, budgets, and login sources.
+    public var cloudServices: [CloudServicePlanConfig]
 
     public init(hosts: [HostConfig], pollIntervalSeconds: Double = 30, dryRunByDefault: Bool = true,
                 sshConnectTimeoutSeconds: Int = 5, httpTimeoutSeconds: Double = 4, registryLookup: Bool = true,
-                largeDownloadWarningGB: Double = 10) {
+                largeDownloadWarningGB: Double = 10,
+                cloudServices: [CloudServicePlanConfig] = CloudServicePlanConfig.defaultServices) {
         self.hosts = hosts
         self.pollIntervalSeconds = pollIntervalSeconds
         self.dryRunByDefault = dryRunByDefault
@@ -301,11 +304,12 @@ public struct FleetConfig: Codable, Sendable, Hashable {
         self.httpTimeoutSeconds = httpTimeoutSeconds
         self.registryLookup = registryLookup
         self.largeDownloadWarningGB = largeDownloadWarningGB
+        self.cloudServices = cloudServices
     }
 
     enum CodingKeys: String, CodingKey {
         case hosts, pollIntervalSeconds, dryRunByDefault, sshConnectTimeoutSeconds, httpTimeoutSeconds,
-             registryLookup, largeDownloadWarningGB
+             registryLookup, largeDownloadWarningGB, cloudServices
     }
 
     public init(from decoder: Decoder) throws {
@@ -317,7 +321,8 @@ public struct FleetConfig: Codable, Sendable, Hashable {
             sshConnectTimeoutSeconds: try c.decodeIfPresent(Int.self, forKey: .sshConnectTimeoutSeconds) ?? 5,
             httpTimeoutSeconds: try c.decodeIfPresent(Double.self, forKey: .httpTimeoutSeconds) ?? 4,
             registryLookup: try c.decodeIfPresent(Bool.self, forKey: .registryLookup) ?? true,
-            largeDownloadWarningGB: try c.decodeIfPresent(Double.self, forKey: .largeDownloadWarningGB) ?? 10
+            largeDownloadWarningGB: try c.decodeIfPresent(Double.self, forKey: .largeDownloadWarningGB) ?? 10,
+            cloudServices: try c.decodeIfPresent([CloudServicePlanConfig].self, forKey: .cloudServices) ?? CloudServicePlanConfig.defaultServices
         )
     }
 

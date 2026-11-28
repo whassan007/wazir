@@ -3,10 +3,12 @@ import SwiftUI
 // MARK: - Generic flow graph
 
 enum FlowStatus: Equatable {
-    case queued, running, done, failed, retrying, skipped
+    case potential, chosen, queued, running, done, failed, retrying, skipped
 
     var label: String {
         switch self {
+        case .potential: "Standby"
+        case .chosen: "Chosen"
         case .queued: "Queued"
         case .running: "Running"
         case .done: "Done"
@@ -19,6 +21,8 @@ enum FlowStatus: Equatable {
     /// Coolant colour for this state.
     var color: Color {
         switch self {
+        case .potential: Color(red: 0.34, green: 0.38, blue: 0.45)
+        case .chosen: Color(red: 0.38, green: 0.62, blue: 1.00)
         case .queued: Color(red: 0.45, green: 0.50, blue: 0.58)
         case .running: Color(red: 0.20, green: 0.82, blue: 1.00)
         case .done: Color(red: 0.25, green: 0.95, blue: 0.62)
@@ -45,6 +49,12 @@ struct FlowNode: Identifiable, Equatable {
     var appearedAt: Double?
     var startedAt: Double?
     var finishedAt: Double?
+    var machineID: String = ""
+    var memoryLabel: String = ""
+    var memoryFraction: Double? = nil
+    var gpuLabel: String = ""
+    var tokenLabel: String = ""
+    var spendLabel: String = ""
 }
 
 struct FlowGraph: Equatable {
@@ -76,8 +86,8 @@ struct FlowLayout {
         let cols = max(maxWave + 2, 6)
         let left: CGFloat = 80
         let step = (size.width - 110 - left) / CGFloat(cols - 1)
-        let blockW = min(168, step * 0.78)
-        let blockH: CGFloat = 64
+        let blockW = min(214, step * 0.84)
+        let blockH: CGFloat = 90
         let right = size.width - blockW / 2 - 24
         let realStep = (right - left) / CGFloat(cols - 1)
         pump = CGPoint(x: left, y: size.height / 2)
@@ -85,7 +95,7 @@ struct FlowLayout {
         for w in 0...maxWave {
             let col = nodes.filter { $0.wave == w }
             let n = col.count
-            let gap = min(blockH + 34, (size.height - 60) / CGFloat(max(n, 1)))
+            let gap = min(blockH + 26, (size.height - 50) / CGFloat(max(n, 1)))
             let x = left + realStep * CGFloat(w + 1)
             for (i, node) in col.enumerated() {
                 let y = size.height / 2 + (CGFloat(i) - CGFloat(n - 1) / 2) * gap
@@ -307,6 +317,8 @@ struct FlowCanvas<Popover: View>: View {
                 case .retrying: (FlowStatus.retrying.color, 70, 1)
                 case .failed: (FlowStatus.failed.color, 0, 0.55 + 0.45 * abs(sin(clock * 5)))
                 case .done: (FlowStatus.done.color, 14, 0.45)
+                case .chosen: (FlowStatus.chosen.color, 18, 0.55)
+                case .potential: (FlowStatus.potential.color, 0, 0.15)
                 case .queued, .skipped: (FlowStatus.running.color, 4, 0.4) // pooled, waiting
                 }
             }()
@@ -399,7 +411,7 @@ struct FlowCanvas<Popover: View>: View {
         case .done: 1
         case .running, .retrying: node.progress ?? (0.4 + 0.08 * sin(clock * 2))
         case .failed: node.progress ?? 0.5
-        case .queued, .skipped: 0
+        case .potential, .chosen, .queued, .skipped: 0
         }
         if level > 0 {
             var inner = ctx
@@ -417,7 +429,12 @@ struct FlowCanvas<Popover: View>: View {
                                                    startPoint: CGPoint(x: r.midX, y: y0),
                                                    endPoint: CGPoint(x: r.midX, y: r.maxY)))
         }
-        ctx.stroke(shape, with: .color(col.opacity(selected ? 1 : 0.55)), lineWidth: selected ? 2 : 1)
+        if node.status == .potential {
+            ctx.stroke(shape, with: .color(col.opacity(selected ? 0.9 : 0.45)),
+                       style: StrokeStyle(lineWidth: selected ? 2 : 1.2, dash: [5, 4]))
+        } else {
+            ctx.stroke(shape, with: .color(col.opacity(selected ? 1 : 0.6)), lineWidth: selected ? 2 : 1.2)
+        }
 
         for p in [CGPoint(x: r.minX, y: r.midY), CGPoint(x: r.maxX, y: r.midY)] {
             ctx.fill(Path(ellipseIn: CGRect(x: p.x - 6, y: p.y - 6, width: 12, height: 12)), with: .color(Color(white: 0.28)))
@@ -435,6 +452,19 @@ struct FlowCanvas<Popover: View>: View {
             .font(.system(size: 11, design: .monospaced)).foregroundColor(.white.opacity(0.6))
         let status = Text("\(label)\(detail)")
         ctx.draw(status, at: CGPoint(x: r.minX + 14, y: r.minY + 50), anchor: .leading)
+        let telemetryParts = [node.memoryLabel, node.gpuLabel, node.tokenLabel, node.spendLabel].filter { !$0.isEmpty }
+        if !telemetryParts.isEmpty {
+            let barRect = CGRect(x: r.minX + 14, y: r.minY + 66, width: r.width - 28, height: 3)
+            ctx.fill(Path(roundedRect: barRect, cornerRadius: 1.5), with: .color(.white.opacity(0.08)))
+            if let mf = node.memoryFraction {
+                let fillW = max(2, barRect.width * CGFloat(min(1, max(0, mf))))
+                ctx.fill(Path(roundedRect: CGRect(x: barRect.minX, y: barRect.minY, width: fillW, height: 3), cornerRadius: 1.5),
+                         with: .color(mf > 0.85 ? .orange : col.opacity(0.85)))
+            }
+            ctx.draw(Text(Self.clip(telemetryParts.joined(separator: " · "), Int(r.width / 5.8)))
+                        .font(.system(size: 9.5, design: .monospaced)).foregroundColor(.white.opacity(0.65)),
+                     at: CGPoint(x: r.minX + 14, y: r.minY + 78), anchor: .leading)
+        }
         ctx.opacity = 1
     }
 

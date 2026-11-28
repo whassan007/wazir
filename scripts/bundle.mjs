@@ -5,10 +5,13 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import { execSync } from 'node:child_process';
+import { syncFleetUpstream } from './sync-fleet-upstream.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const rootDir = resolve(__dirname, '..');
+
+syncFleetUpstream({ ifPresent: true, quiet: true });
 
 const version = process.env.WAZIR_BUILD_VERSION || JSON.parse(readFileSync(resolve(rootDir, 'package.json'), 'utf8')).version;
 

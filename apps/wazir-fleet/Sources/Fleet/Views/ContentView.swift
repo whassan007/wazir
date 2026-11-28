@@ -11,6 +11,8 @@ struct ContentView: View {
                 .navigationSplitViewColumnWidth(min: 220, ideal: 250)
         } detail: {
             VStack(spacing: 0) {
+                ProjectHeaderBar()
+                Divider()
                 CommandBar()
                 Divider()
                 if let err = store.configError {
@@ -42,8 +44,10 @@ struct ContentView: View {
     @ViewBuilder private var detail: some View {
         switch store.selection ?? .overview {
         case .overview: OverviewView()
+        case .cloudServices: CloudServicesView()
         case .activity: ActivityView()
         case .flow: FlowView()
+        case .studio: VisualOrchestrationStudioView()
         case .host(let id):
             if let cfg = store.config.host(id: id), let hs = store.state.hosts[id] {
                 HostDetailView(host: cfg, state: hs)
@@ -51,6 +55,50 @@ struct ContentView: View {
                 ContentUnavailableView("Host removed", systemImage: "questionmark.circle")
             }
         }
+    }
+}
+
+struct ProjectHeaderBar: View {
+    @Environment(FleetStore.self) private var store
+
+    var body: some View {
+        let name = URL(fileURLWithPath: store.projectFolderPath).lastPathComponent
+        HStack(spacing: 10) {
+            Image(systemName: "folder.fill.badge.gearshape")
+                .foregroundStyle(Color.accentColor)
+            Text(name.isEmpty ? "No Project" : name)
+                .font(.headline)
+            Text(store.projectFolderPath)
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            if let ctx = store.projectContext {
+                Chip(text: ctx.gitBranch, color: .green, systemImage: "arrow.triangle.branch")
+                Chip(text: ctx.detectedBuildSystem.rawValue, color: .blue)
+                Chip(text: "\(ctx.trackedFiles.count) files · \(ctx.dirtyHumanFiles.count) modified", color: .secondary)
+            }
+            Spacer()
+            if !store.discoveredCodeProjects.isEmpty {
+                Menu("Switch Project") {
+                    ForEach(store.discoveredCodeProjects, id: \.self) { path in
+                        Button(URL(fileURLWithPath: path).lastPathComponent) {
+                            store.loadProjectFolder(path: path)
+                        }
+                    }
+                }
+                .controlSize(.small)
+            }
+            Button {
+                store.promptForProjectFolder()
+            } label: {
+                Label("Load Project Folder…", systemImage: "folder.badge.plus")
+            }
+            .controlSize(.small)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(.bar)
     }
 }
 
@@ -93,6 +141,11 @@ struct SidebarView: View {
                 Label("Overview", systemImage: "square.grid.2x2")
                     .badge("\(store.state.onlineCount)/\(store.state.hostOrder.count)")
                     .tag(SidebarItem.overview)
+                Label("Cloud & Budgets", systemImage: "cloud.fill")
+                    .badge(store.allFrontierCloudModels.count)
+                    .tag(SidebarItem.cloudServices)
+                Label("Visual Studio", systemImage: "square.3.layers.3d")
+                    .tag(SidebarItem.studio)
                 Label("Activity", systemImage: "list.bullet.rectangle")
                     .badge(store.state.runningOperations.count)
                     .tag(SidebarItem.activity)

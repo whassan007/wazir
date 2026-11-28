@@ -1,0 +1,10 @@
+{
+  "upstreamPath": "/Users/wael/Code/Fleet",
+  "branch": "release/fleet-core-1.0.0-rc1",
+  "commit": "12ed112a01fee45a4948d40129a3b27af1b73895",
+  "commitShort": "12ed112",
+  "commitSubject": "Add Project Folder loader, standby grey potential machine boxes, and Flow telemetry HUD",
+  "commitDate": "2026-11-27T21:43:14-08:00",
+  "dirtyWorkingTree": true,
+  "syncedAt": "2026-11-28T05:46:15.345Z"
+}

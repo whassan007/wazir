@@ -1,4 +1,7 @@
 import { Command } from 'commander';
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
 import {
   parseFleetCommand,
   planFleetOperation,
@@ -87,6 +90,43 @@ export function registerConsolidatedCommands(program: Command): void {
         });
         const record = executeFleetPlanDryRun(plan);
         console.log(options.json ? JSON.stringify({ ok: true, record }, null, 2) : `${record.summary}: ${record.status}`);
+      });
+
+    fleetCmd
+      .command('sync')
+      .description('Sync apps/wazir-fleet with the latest upstream Fleet repository')
+      .option('--build', 'Rebuild the macOS Wazir Fleet app bundle after syncing')
+      .option('--open', 'Open Wazir Fleet after building')
+      .option('--remote', 'Fetch from GitHub if local Fleet checkout is not present')
+      .option('--json', 'Output JSON')
+      .action((options: { build?: boolean; open?: boolean; remote?: boolean; json?: boolean }) => {
+        const scriptPath = path.resolve(process.cwd(), 'scripts/sync-fleet-upstream.mjs');
+        if (!fs.existsSync(scriptPath)) {
+          console.error('scripts/sync-fleet-upstream.mjs not found in current repository.');
+          process.exit(1);
+        }
+        const args = [scriptPath, '--json'];
+        if (options.build) args.push('--build');
+        if (options.open) args.push('--open');
+        if (options.remote) args.push('--remote');
+        const res = spawnSync(process.execPath, args, { encoding: 'utf8' });
+        if (res.status !== 0) {
+          console.error(res.stderr || res.stdout || 'Fleet sync failed.');
+          process.exit(res.status ?? 1);
+        }
+        console.log(options.json ? res.stdout.trim() : `Wazir Fleet synced: ${res.stdout.trim()}`);
+      });
+
+    fleetCmd
+      .command('app')
+      .description('Sync latest Fleet upstream and build/open the native macOS Wazir Fleet app')
+      .option('--no-open', 'Build without opening')
+      .action((options: { open?: boolean }) => {
+        const scriptPath = path.resolve(process.cwd(), 'scripts/sync-fleet-upstream.mjs');
+        const args = [scriptPath, '--if-present', '--build'];
+        if (options.open !== false) args.push('--open');
+        const res = spawnSync(process.execPath, args, { stdio: 'inherit' });
+        process.exit(res.status ?? 0);
       });
   }
 

@@ -57,6 +57,7 @@ struct FlowView: View {
                                           reviewPlan: Binding(get: { live.reviewPlan }, set: { live.reviewPlan = $0 }),
                                           liveMode: $liveMode, isRunning: agentRun.isRunning)
                         }
+                        .overlay(alignment: .topLeading) { canvasTelemetryHUD }
                         .overlay(alignment: .bottom) { reviewBanner }
                         .overlay(alignment: .bottomTrailing) { canvasControls }
                         Divider()
@@ -285,12 +286,66 @@ struct FlowView: View {
 
     private func refreshPreview(keepResults: Bool = false) {
         guard liveMode, !live.isRunning, !(keepResults || live.stage == .finished) else { return }
-        live.preview(planner: planner)
+        live.preview(planner: planner, potentialMachines: potentialMachines)
     }
 
     private func setPlanner(_ w: FleetWorker?) {
         plannerChoice = w
-        if liveMode, !live.isRunning { live.preview(planner: w) }
+        if liveMode, !live.isRunning { live.preview(planner: w, potentialMachines: potentialMachines) }
+    }
+
+    private var potentialMachines: [PotentialMachineBox] {
+        var boxes: [PotentialMachineBox] = store.orderedHosts.map { cfg, hs in
+            let memFrac = hs.metrics?.memoryUsedFraction
+            let memText: String = if let t = hs.metrics?.memTotalBytes, let a = hs.metrics?.memAvailableBytes, t > 0 {
+                "\(Format.bytes(t - a))/\(Format.bytes(t))"
+            } else if let gb = cfg.memoryGB {
+                "\(gb) GB"
+            } else {
+                ""
+            }
+            let gpuText = hs.metrics?.gpus.first?.utilizationPercent.map { "GPU \(Int($0))%" } ?? ""
+            let topModel = hs.allModels.first(where: { $0.1.isLoaded })?.1.name ?? hs.allModels.first?.1.name ?? "no model"
+            return PotentialMachineBox(
+                id: cfg.id,
+                name: cfg.name,
+                modelLabel: "\(topModel) @ \(cfg.id)",
+                memoryLabel: memText,
+                memoryFraction: memFrac,
+                gpuLabel: gpuText,
+                spendLabel: "Local · $0.00"
+            )
+        }
+        for (cfg, snap) in store.orderedCloudServices {
+            boxes.append(PotentialMachineBox(
+                id: "cloud-\(cfg.id)",
+                name: cfg.displayName,
+                modelLabel: snap?.discoveredModels.first(where: \.isActiveDefault)?.displayName ?? cfg.planName,
+                memoryLabel: "Cloud",
+                memoryFraction: snap?.budgetUtilizationFraction,
+                gpuLabel: "",
+                spendLabel: String(format: "$%.0f plan", cfg.totalBudgetCeilingUSD)
+            ))
+        }
+        return boxes
+    }
+
+    private var canvasTelemetryHUD: some View {
+        let projectName = URL(fileURLWithPath: store.projectFolderPath).lastPathComponent
+        let chosen = agentRun.graph.nodes.filter { $0.status != .potential }.count
+        let standby = agentRun.graph.nodes.filter { $0.status == .potential }.count
+        return HStack(spacing: 10) {
+            Label(projectName, systemImage: "folder.fill")
+                .font(.caption.weight(.semibold))
+            Text("·").foregroundStyle(.secondary)
+            Text("Chosen: \(chosen)").font(.caption.monospacedDigit()).foregroundStyle(FlowStatus.chosen.color)
+            Text("Standby: \(standby)").font(.caption.monospacedDigit()).foregroundStyle(FlowStatus.potential.color)
+            Text("·").foregroundStyle(.secondary)
+            Text("Tokens: \(agentRun.totalTokens.formatted())").font(.caption.monospacedDigit())
+        }
+        .padding(.horizontal, 10).padding(.vertical, 6)
+        .background(Capsule().fill(.black.opacity(0.55)))
+        .padding(10)
     }
 
     private func operationSummary(_ op: OperationRecord) -> some View {

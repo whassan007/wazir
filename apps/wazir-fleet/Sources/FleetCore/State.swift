@@ -292,6 +292,8 @@ public struct FleetState: Equatable, Sendable {
     }
     /// Per-host keys used to match Tailscale peers (derived from config).
     public var tailscaleConfig: [String: TailscaleMatchKey] = [:]
+    /// Discovered cloud service snapshots (budgets, token spend, frontier models).
+    public var cloudSnapshots: [String: CloudServiceSnapshot] = [:]
 
     public init() {}
 
@@ -311,4 +313,5 @@ public enum FleetEvent: Equatable, Sendable {
     case operationStarted(OperationRecord)
     case operation(UUID, OperationEvent, at: Date)
     case clearFinishedOperations
+    case cloudServicesUpdated([CloudServiceSnapshot], at: Date)
 }

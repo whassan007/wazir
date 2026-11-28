@@ -23,10 +23,13 @@ struct VisualOrchestrationStudioView: View {
             HStack(spacing: 10) {
                 Image(systemName: "folder.badge.gearshape").foregroundStyle(Color.accentColor)
                 Text("Repo:").font(.caption).foregroundStyle(.secondary)
-                TextField("Target project repository path", text: $targetRepoPath)
-                    .textFieldStyle(.roundedBorder)
+                Text(store.projectFolderPath)
                     .font(.caption.monospaced())
-                    .frame(maxWidth: 320)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: 320, alignment: .leading)
+                Button("Load Folder…") { store.promptForProjectFolder() }
+                    .controlSize(.small)
                 Picker("View", selection: $viewMode) {
                     ForEach(StudioViewMode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                 }

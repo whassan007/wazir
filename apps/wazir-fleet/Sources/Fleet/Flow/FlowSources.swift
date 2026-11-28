@@ -162,7 +162,7 @@ final class AgentSimulation {
                     a.node.progress = 0
                     a.log.append(stamp("retrying (attempt \(a.attempt))"))
                 }
-            case .done, .skipped:
+            case .potential, .chosen, .done, .skipped:
                 break
             }
             agents[i] = a

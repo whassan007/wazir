@@ -2,6 +2,17 @@ import FleetCore
 import Foundation
 import Observation
 
+/// A candidate machine or cloud service shown in standby grey before the orchestrator chooses.
+struct PotentialMachineBox: Equatable, Sendable {
+    var id: String
+    var name: String
+    var modelLabel: String
+    var memoryLabel: String
+    var memoryFraction: Double?
+    var gpuLabel: String
+    var spendLabel: String
+}
+
 /// A chat-capable model on an online machine.
 struct FleetWorker: Equatable, Hashable, Sendable {
     var model: String
@@ -60,8 +71,9 @@ final class LiveAgentRun: AgentRunModel {
                   sourceActiveAt: stage == .idle ? nil : 0, isActive: isRunning && stage != .review)
     }
 
-    /// Before a run: shows the planner block on the chosen machine, so the loop has a shape.
-    func preview(planner: FleetWorker?) {
+    /// Before a run: shows the planner block on the chosen machine AND all potential
+    /// fleet machines in standby grey until the orchestrator/planner selects them.
+    func preview(planner: FleetWorker?, potentialMachines: [PotentialMachineBox] = []) {
         guard !isRunning else { return }
         agents = []
         stage = .idle
@@ -69,10 +81,34 @@ final class LiveAgentRun: AgentRunModel {
         problem = nil
         startDate = nil
         endTime = nil
-        guard let planner else { return }
-        addAgent(id: "planner", title: "Planner", wave: 0, deps: [],
-                 task: "Break the prompt into parallel subtasks", worker: planner)
-        agents[0].node.appearedAt = nil
+        if let planner {
+            addAgent(id: "planner", title: "Planner", wave: 0, deps: [],
+                     task: "Break the prompt into parallel subtasks", worker: planner)
+            agents[0].node.status = .chosen
+            agents[0].node.appearedAt = nil
+        }
+        for m in potentialMachines {
+            let pid = "standby-\(m.id)"
+            var node = FlowNode(
+                id: pid,
+                title: m.name,
+                subtitle: m.modelLabel,
+                wave: 1,
+                deps: planner != nil ? ["planner"] : [],
+                status: .potential,
+                progress: nil,
+                detail: "Awaiting orchestrator",
+                appearedAt: nil,
+                machineID: m.id,
+                memoryLabel: m.memoryLabel,
+                memoryFraction: m.memoryFraction,
+                gpuLabel: m.gpuLabel,
+                tokenLabel: "0 tok",
+                spendLabel: m.spendLabel
+            )
+            node.appearedAt = nil
+            agents.append(Agent(node: node, task: "Standby candidate machine", duration: 0, tokenRate: 0))
+        }
     }
 
     /// Moves a block that hasn't started yet to another model.
