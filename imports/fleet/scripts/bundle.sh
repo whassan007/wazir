@@ -18,6 +18,13 @@ echo "Built $APP"
 for arg in "$@"; do
   case "$arg" in
     --install) rm -rf /Applications/Fleet.app && cp -R "$APP" /Applications/ && echo "Installed /Applications/Fleet.app" ;;
-    --open) open "$APP" ;;
+    --open)
+      # `open` only re-activates an already-running instance, so quit any old build first.
+      if pgrep -x Fleet >/dev/null; then
+        osascript -e 'quit app id "dev.fleet.Fleet"' >/dev/null 2>&1 || true
+        for _ in 1 2 3 4 5 6 7 8 9 10; do pgrep -x Fleet >/dev/null || break; sleep 0.5; done
+        pkill -x Fleet 2>/dev/null || true
+      fi
+      open "$APP" ;;
   esac
 done

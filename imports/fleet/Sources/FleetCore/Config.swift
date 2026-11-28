@@ -7,6 +7,8 @@ public enum RuntimeKind: String, Codable, Sendable, CaseIterable, Hashable, Iden
     case lmstudio
     case llamacpp
     case mlx
+    case vllm
+    case openaiCompatible
 
     public var id: String { rawValue }
 
@@ -16,6 +18,8 @@ public enum RuntimeKind: String, Codable, Sendable, CaseIterable, Hashable, Iden
         case .lmstudio: "LM Studio"
         case .llamacpp: "llama.cpp"
         case .mlx: "MLX"
+        case .vllm: "vLLM"
+        case .openaiCompatible: "OpenAI-Compatible"
         }
     }
 
@@ -25,6 +29,8 @@ public enum RuntimeKind: String, Codable, Sendable, CaseIterable, Hashable, Iden
         case .lmstudio: 1234
         case .llamacpp: 8080
         case .mlx: 8081
+        case .vllm: 8000
+        case .openaiCompatible: 8080
         }
     }
 
@@ -35,12 +41,14 @@ public enum RuntimeKind: String, Codable, Sendable, CaseIterable, Hashable, Iden
         case .lmstudio: ["lmstudio", "lm-studio", "lm_studio", "lms"]
         case .llamacpp: ["llamacpp", "llama.cpp", "llama-cpp", "llama-server", "llamaserver", "gguf"]
         case .mlx: ["mlx", "mlx-lm", "mlx_lm", "mlxlm"]
+        case .vllm: ["vllm"]
+        case .openaiCompatible: ["openai", "openai-compatible", "openaicompatible"]
         }
     }
 
     public static func fromKeyword(_ word: String) -> RuntimeKind? {
         let w = word.lowercased()
-        return allCases.first { $0.keywords.contains(w) || $0.rawValue == w }
+        return allCases.first { $0.keywords.contains(w) || $0.rawValue.lowercased() == w }
     }
 }
 
@@ -123,6 +131,8 @@ public struct CommandTemplates: Codable, Sendable, Hashable {
                 update: "hf download {repo}",
                 reload: nil
             )
+        case .vllm, .openaiCompatible:
+            return CommandTemplates()
         }
     }
 }

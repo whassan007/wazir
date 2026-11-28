@@ -3,12 +3,13 @@ import Foundation
 import Observation
 
 /// A chat-capable model on an online machine.
-struct FleetWorker: Equatable, Sendable {
+struct FleetWorker: Equatable, Hashable, Sendable {
     var model: String
     var host: String
     var kind: RuntimeKind
     var base: URL
     var isLoaded: Bool
+    var sizeBytes: Int64? = nil
     var label: String { "\(model) @ \(host)" }
 }
 
@@ -34,8 +35,14 @@ extension AgentSimulation: AgentRunModel {}
 final class LiveAgentRun: AgentRunModel {
     typealias Agent = AgentSimulation.Agent
 
+    enum Stage: Equatable { case idle, planning, review, running, finished }
+
     private(set) var agents: [Agent] = []
     private(set) var isRunning = false
+    private(set) var stage: Stage = .idle
+    /// When on, the run pauses after planning so the plan can be inspected and reassigned.
+    var reviewPlan = true
+    private var approval: CheckedContinuation<Bool, Never>?
     private(set) var finalAnswer: String?
     private(set) var problem: String?
     private var startDate: Date?
@@ -49,13 +56,50 @@ final class LiveAgentRun: AgentRunModel {
     }
     var graph: FlowGraph {
         FlowGraph(nodes: agents.map(\.node), sourceLabel: "Prompt",
-                  sourceActiveAt: agents.isEmpty ? nil : 0, isActive: isRunning)
+                  sourceSubtitle: agent("planner")?.worker?.label ?? "",
+                  sourceActiveAt: stage == .idle ? nil : 0, isActive: isRunning && stage != .review)
+    }
+
+    /// Before a run: shows the planner block on the chosen machine, so the loop has a shape.
+    func preview(planner: FleetWorker?) {
+        guard !isRunning else { return }
+        agents = []
+        stage = .idle
+        finalAnswer = nil
+        problem = nil
+        startDate = nil
+        endTime = nil
+        guard let planner else { return }
+        addAgent(id: "planner", title: "Planner", wave: 0, deps: [],
+                 task: "Break the prompt into parallel subtasks", worker: planner)
+        agents[0].node.appearedAt = nil
+    }
+
+    /// Moves a block that hasn't started yet to another model.
+    func reassign(_ id: String, to worker: FleetWorker) {
+        update(id) {
+            guard $0.node.status == .queued else { return }
+            $0.worker = worker
+            $0.node.subtitle = worker.label
+            if stage != .idle { $0.log.append(stamp("assigned to \(worker.label)")) }
+        }
+    }
+
+    func canReassign(_ id: String?) -> Bool {
+        guard let a = agent(id), id != "result" else { return false }
+        return a.node.status == .queued
+    }
+
+    /// Releases the run after the plan review.
+    func approve() {
+        approval?.resume(returning: true)
+        approval = nil
     }
     var totalTokens: Int { agents.reduce(0) { $0 + $1.tokens } }
     var retries: Int { agents.reduce(0) { $0 + $1.attempt - 1 } }
     func agent(_ id: String?) -> Agent? { agents.first { $0.node.id == id } }
 
-    func start(prompt: String, workers: [FleetWorker]) {
+    func start(prompt: String, planner: FleetWorker, workers: [FleetWorker]) {
         stop()
         agents = []
         finalAnswer = nil
@@ -63,13 +107,16 @@ final class LiveAgentRun: AgentRunModel {
         endTime = nil
         startDate = Date()
         isRunning = true
+        stage = .planning
         runTask = Task { [weak self] in
-            await self?.run(goal: prompt, workers: workers)
+            await self?.run(goal: prompt, planner: planner, workers: workers)
             self?.finish()
         }
     }
 
     func stop() {
+        approval?.resume(returning: false)
+        approval = nil
         runTask?.cancel()
         runTask = nil
         if isRunning { finish() }
@@ -78,6 +125,7 @@ final class LiveAgentRun: AgentRunModel {
     private func finish() {
         guard isRunning else { return }
         isRunning = false
+        stage = .finished
         endTime = startDate.map { Date().timeIntervalSince($0) }
         for i in agents.indices where agents[i].node.status == .queued || agents[i].node.status.isActive {
             agents[i].node.status = .skipped
@@ -87,15 +135,15 @@ final class LiveAgentRun: AgentRunModel {
 
     // MARK: Pipeline
 
-    private func run(goal: String, workers: [FleetWorker]) async {
-        guard let lead = workers.first else { problem = "No chat models on online machines."; return }
-        let critic = workers.first { $0.host != lead.host } ?? workers[min(1, workers.count - 1)]
+    private func run(goal: String, planner lead: FleetWorker, workers pool: [FleetWorker]) async {
+        let workers = pool.isEmpty ? [lead] : pool
+        let critic = workers.first { $0.host != lead.host } ?? workers.first { $0 != lead } ?? lead
 
         addAgent(id: "planner", title: "Planner", wave: 0, deps: [], task: "Break the prompt into parallel subtasks",
                  worker: lead)
         let maxSubtasks = min(5, max(3, workers.count))
         guard let planText = await execute("planner", AgentPrompts.planner(goal: goal, maxSubtasks: maxSubtasks),
-                                           budget: 2048, workers: workers) else {
+                                           budget: 3072, workers: [lead] + workers) else {
             problem = "The planner failed, so the run stopped."
             return
         }
@@ -108,7 +156,8 @@ final class LiveAgentRun: AgentRunModel {
         }
 
         // Spread workers across machines, skipping the planner's model when there are others.
-        let rotation = workers.count > 1 ? Array(workers.dropFirst()) + [lead] : workers
+        let others = workers.filter { $0 != lead }
+        let rotation = others.isEmpty ? [lead] : others
         var ids: [String] = []
         for (i, s) in subtasks.enumerated() {
             let id = "w\(i)"
@@ -122,6 +171,15 @@ final class LiveAgentRun: AgentRunModel {
                  worker: critic)
         addAgent(id: "result", title: "Result", wave: 4, deps: ["critic"], task: "Final answer",
                  worker: nil)
+
+        if reviewPlan {
+            stage = .review
+            log("planner", "waiting for you to review the plan")
+            let go = await withCheckedContinuation { approval = $0 }
+            guard go, !Task.isCancelled else { return }
+            log("planner", "plan approved")
+        }
+        stage = .running
 
         // Workers run concurrently: each awaits its own network stream off the main actor.
         let tasks = subtasks.enumerated().map { i, s in

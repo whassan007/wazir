@@ -84,6 +84,7 @@ public enum RuntimeClients {
         case .lmstudio: try await LMStudioClient(http: http).inventory(base: base)
         case .llamacpp: try await OpenAIModelsClient(http: http, assumeLoaded: true).inventory(base: base)
         case .mlx: try await OpenAIModelsClient(http: http, assumeLoaded: false).inventory(base: base)
+        case .vllm, .openaiCompatible: try await OpenAIModelsClient(http: http, assumeLoaded: true).inventory(base: base)
         }
     }
 }

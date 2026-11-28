@@ -115,7 +115,7 @@ struct CommandParserTests {
         #expect(throws: ParseError.unknownVerb("frobnicate")) { try parser.parse("frobnicate qwen on jetson") }
         #expect(throws: ParseError.missingModel(.add)) { try parser.parse("add model on jetson") }
         #expect(throws: ParseError.missingHost(.remove)) { try parser.parse("remove qwen2.5") }
-        #expect(throws: ParseError.unknownRuntime("vllm")) { try parser.parse("add qwen2.5 on jetson via vllm") }
+        #expect(throws: ParseError.unknownRuntime("tensorrt")) { try parser.parse("add qwen2.5 on jetson via tensorrt") }
         #expect(throws: ParseError.conflictingModes) { try parser.parse("add qwen2.5 on jetson --live --dry-run") }
         #expect(throws: ParseError.conflictingRuntimes(.ollama, .mlx)) { try parser.parse("add qwen2.5 on jetson via ollama runtime=mlx") }
         #expect(throws: ParseError.missingValue("--runtime")) { try parser.parse("add qwen2.5 on jetson --runtime") }

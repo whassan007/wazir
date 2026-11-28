@@ -50,12 +50,18 @@ struct FlowNode: Identifiable, Equatable {
 struct FlowGraph: Equatable {
     var nodes: [FlowNode]
     var sourceLabel: String
+    /// Shown under the pump, e.g. the machine and model that plans the prompt.
+    var sourceSubtitle: String = ""
     /// When the pump started pushing into the root nodes.
     var sourceActiveAt: Double?
     var isActive: Bool
 
     static let empty = FlowGraph(nodes: [], sourceLabel: "Idle", sourceActiveAt: nil, isActive: false)
     func node(_ id: String?) -> FlowNode? { nodes.first { $0.id == id } }
+}
+
+enum FlowTheme {
+    static let background = Color(red: 0.03, green: 0.035, blue: 0.055)
 }
 
 // MARK: - Layout
@@ -88,7 +94,37 @@ struct FlowLayout {
         }
     }
 
-    func hit(_ p: CGPoint) -> String? { rects.first { $0.value.insetBy(dx: -6, dy: -6).contains(p) }?.key }
+    /// Applies the user's manual drags on top of the automatic layout.
+    init(nodes: [FlowNode], size: CGSize, offsets: [String: CGSize]) {
+        self.init(nodes: nodes, size: size)
+        for (id, r) in rects { if let o = offsets[id] { rects[id] = r.offsetBy(dx: o.width, dy: o.height) } }
+        if let o = offsets[FlowLayout.pumpID] { pump = CGPoint(x: pump.x + o.width, y: pump.y + o.height) }
+    }
+
+    static let pumpID = "__pump__"
+
+    func hit(_ p: CGPoint) -> String? {
+        if hypot(p.x - pump.x, p.y - pump.y) <= pumpRadius + 6 { return Self.pumpID }
+        return rects.first { $0.value.insetBy(dx: -6, dy: -6).contains(p) }?.key
+    }
+}
+
+/// Pan, zoom and per-block positions the user has dragged. World → screen is `p * zoom + pan`.
+struct FlowViewport: Equatable {
+    var pan: CGSize = .zero
+    var zoom: CGFloat = 1
+    var offsets: [String: CGSize] = [:]
+
+    func toWorld(_ p: CGPoint) -> CGPoint { CGPoint(x: (p.x - pan.width) / zoom, y: (p.y - pan.height) / zoom) }
+    func toScreen(_ p: CGPoint) -> CGPoint { CGPoint(x: p.x * zoom + pan.width, y: p.y * zoom + pan.height) }
+
+    /// Zooms about a screen point so the content under it stays put.
+    mutating func zoom(to z: CGFloat, around anchor: CGPoint) {
+        let nz = min(2.5, max(0.4, z))
+        let w = toWorld(anchor)
+        zoom = nz
+        pan = CGSize(width: anchor.x - w.x * nz, height: anchor.y - w.y * nz)
+    }
 }
 
 private struct Bezier {
@@ -115,35 +151,117 @@ private struct Bezier {
 // MARK: - Liquid-cooling renderer
 
 /// `now` drives state-based animation (fills, appear), `clock` drives the continuous flow.
-struct FlowCanvas: View {
+/// Drag empty space to pan, drag a block or the pump to move it, pinch to zoom.
+/// Clicking the pump calls `onPumpTap`; `pumpPopover` is anchored to the pump.
+struct FlowCanvas<Popover: View>: View {
     var graph: FlowGraph
     var now: Double
     var clock: Double
     @Binding var selection: String?
+    @Binding var viewport: FlowViewport
+    var pumpHint: String? = nil
+    @Binding var showPumpPopover: Bool
+    @ViewBuilder var pumpPopover: () -> Popover
 
-    static let background = Color(red: 0.03, green: 0.035, blue: 0.055)
+    @State private var drag: DragState?
+    @State private var zoomStart: CGFloat?
+    @State private var hovering: String?
+
+    private struct DragState {
+        var target: String?  // node id, pump id, or nil for panning
+        var startOffset: CGSize
+        var startPan: CGSize
+    }
+
 
     var body: some View {
         GeometryReader { geo in
-            Canvas { ctx, size in draw(&ctx, size: size) }
+            let layout = FlowLayout(nodes: graph.nodes, size: geo.size, offsets: viewport.offsets)
+            let pumpScreen = viewport.toScreen(layout.pump)
+            Canvas { ctx, size in draw(&ctx, size: size, layout: layout) }
                 .contentShape(Rectangle())
-                .gesture(SpatialTapGesture().onEnded { v in
-                    selection = FlowLayout(nodes: graph.nodes, size: geo.size).hit(v.location)
-                })
+                .gesture(dragGesture(layout: layout))
+                .simultaneousGesture(MagnifyGesture()
+                    .onChanged { v in
+                        let start = zoomStart ?? viewport.zoom
+                        zoomStart = start
+                        viewport.zoom(to: start * v.magnification, around: v.startLocation)
+                    }
+                    .onEnded { _ in zoomStart = nil })
+                .onContinuousHover { phase in
+                    switch phase {
+                    case .active(let p): hovering = layout.hit(viewport.toWorld(p))
+                    case .ended: hovering = nil
+                    }
+                }
+                .overlay(alignment: .topLeading) {
+                    // Invisible anchor so the popover points at the pump wherever it has been dragged.
+                    Color.clear
+                        .frame(width: layout.pumpRadius * 2 * viewport.zoom, height: layout.pumpRadius * 2 * viewport.zoom)
+                        .position(pumpScreen)
+                        .allowsHitTesting(false)
+                        .popover(isPresented: $showPumpPopover, arrowEdge: .trailing) { pumpPopover() }
+                }
+                .overlay(alignment: .topLeading) {
+                    if let pumpHint {
+                        Text(pumpHint)
+                            .font(.system(size: 11, weight: .medium))
+                            .padding(.horizontal, 8).padding(.vertical, 4)
+                            .background(Capsule().fill(FlowStatus.running.color.opacity(0.18)))
+                            .overlay(Capsule().stroke(FlowStatus.running.color.opacity(0.5)))
+                            .foregroundStyle(.white)
+                            .fixedSize()
+                            .position(x: pumpScreen.x, y: pumpScreen.y - (layout.pumpRadius + 22) * viewport.zoom)
+                            .allowsHitTesting(false)
+                    }
+                }
         }
     }
 
-    private func draw(_ ctx: inout GraphicsContext, size: CGSize) {
-        ctx.fill(Path(CGRect(origin: .zero, size: size)), with: .color(Self.background))
+    private func dragGesture(layout: FlowLayout) -> some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { v in
+                if drag == nil {
+                    let target = layout.hit(viewport.toWorld(v.startLocation))
+                    drag = DragState(target: target, startOffset: target.flatMap { viewport.offsets[$0] } ?? .zero,
+                                     startPan: viewport.pan)
+                }
+                guard let d = drag, hypot(v.translation.width, v.translation.height) > 3 else { return }
+                if let t = d.target {
+                    viewport.offsets[t] = CGSize(width: d.startOffset.width + v.translation.width / viewport.zoom,
+                                                 height: d.startOffset.height + v.translation.height / viewport.zoom)
+                } else {
+                    viewport.pan = CGSize(width: d.startPan.width + v.translation.width,
+                                          height: d.startPan.height + v.translation.height)
+                }
+            }
+            .onEnded { v in
+                defer { drag = nil }
+                guard hypot(v.translation.width, v.translation.height) <= 3 else { return }
+                // A click, not a drag.
+                switch layout.hit(viewport.toWorld(v.startLocation)) {
+                case FlowLayout.pumpID?: showPumpPopover = true
+                case let id: selection = id
+                }
+            }
+    }
+
+    private func draw(_ ctx: inout GraphicsContext, size: CGSize, layout: FlowLayout) {
+        ctx.fill(Path(CGRect(origin: .zero, size: size)), with: .color(FlowTheme.background))
+        // Grid dots move with the pan and zoom so dragging feels anchored.
         var dots = Path()
-        for x in stride(from: CGFloat(14), to: size.width, by: 28) {
-            for y in stride(from: CGFloat(14), to: size.height, by: 28) {
+        let spacing = 28 * viewport.zoom
+        let ox = viewport.pan.width.truncatingRemainder(dividingBy: spacing)
+        let oy = viewport.pan.height.truncatingRemainder(dividingBy: spacing)
+        for x in stride(from: ox - spacing, to: size.width, by: spacing) {
+            for y in stride(from: oy - spacing, to: size.height, by: spacing) {
                 dots.addEllipse(in: CGRect(x: x - 0.8, y: y - 0.8, width: 1.6, height: 1.6))
             }
         }
         ctx.fill(dots, with: .color(.white.opacity(0.045)))
+        ctx.translateBy(x: viewport.pan.width, y: viewport.pan.height)
+        ctx.scaleBy(x: viewport.zoom, y: viewport.zoom)
 
-        let layout = FlowLayout(nodes: graph.nodes, size: size)
         let byID = Dictionary(graph.nodes.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
 
         for node in graph.nodes {
@@ -245,8 +363,17 @@ struct FlowCanvas: View {
         }
         ctx.stroke(blades, with: .color(col.opacity(0.9)), style: StrokeStyle(lineWidth: 3, lineCap: .round))
         ctx.fill(Path(ellipseIn: CGRect(x: c.x - 6, y: c.y - 6, width: 12, height: 12)), with: .color(col))
+        if hovering == FlowLayout.pumpID {
+            ctx.stroke(Path(ellipseIn: CGRect(x: c.x - radius - 5, y: c.y - radius - 5, width: radius * 2 + 10, height: radius * 2 + 10)),
+                       with: .color(.white.opacity(0.35)), style: StrokeStyle(lineWidth: 1.5, dash: [4, 4]))
+        }
         ctx.draw(Text(graph.sourceLabel).font(.system(size: 12, weight: .semibold)).foregroundColor(.white.opacity(0.85)),
                  at: CGPoint(x: c.x, y: c.y + radius + 16))
+        if !graph.sourceSubtitle.isEmpty {
+            ctx.draw(Text(Self.clip(graph.sourceSubtitle, 34)).font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.5)),
+                     at: CGPoint(x: c.x, y: c.y + radius + 31))
+        }
     }
 
     private func drawBlock(_ ctx: inout GraphicsContext, node: FlowNode, rect r0: CGRect) {
@@ -258,7 +385,7 @@ struct FlowCanvas: View {
         ctx.opacity = a * (node.status == .skipped ? 0.55 : 1)
         let col = node.status.color
         let shape = Path(roundedRect: r, cornerRadius: 14, style: .continuous)
-        let selected = selection == node.id
+        let selected = selection == node.id || hovering == node.id && selection == nil
 
         if node.status.isActive || node.status == .failed || selected {
             ctx.drawLayer { l in
@@ -311,6 +438,10 @@ struct FlowCanvas: View {
         ctx.opacity = 1
     }
 
+    static func clip(_ s: String, _ n: Int) -> String { FlowText.clip(s, n) }
+}
+
+enum FlowText {
     static func clip(_ s: String, _ n: Int) -> String { s.count > n ? String(s.prefix(max(1, n - 1))) + "…" : s }
 }
 
@@ -321,7 +452,7 @@ struct FlowTimelineStrip: View {
 
     var body: some View {
         Canvas { ctx, size in
-            ctx.fill(Path(CGRect(origin: .zero, size: size)), with: .color(FlowCanvas.background))
+            ctx.fill(Path(CGRect(origin: .zero, size: size)), with: .color(FlowTheme.background))
             let starts = graph.nodes.compactMap(\.startedAt)
             guard let t0 = (starts + [graph.sourceActiveAt].compactMap { $0 }).min() else { return }
             let end = max(graph.nodes.compactMap(\.finishedAt).max() ?? now, graph.isActive ? now : 0)
@@ -330,7 +461,7 @@ struct FlowTimelineStrip: View {
             let rowH = min(16, (size.height - 16) / CGFloat(max(graph.nodes.count, 1)))
             for (i, n) in graph.nodes.enumerated() {
                 let y = 8 + CGFloat(i) * rowH
-                ctx.draw(Text(FlowCanvas.clip(n.title, 22)).font(.system(size: 10)).foregroundColor(.white.opacity(0.55)),
+                ctx.draw(Text(FlowText.clip(n.title, 22)).font(.system(size: 10)).foregroundColor(.white.opacity(0.55)),
                          at: CGPoint(x: 16, y: y + rowH / 2), anchor: .leading)
                 let track = CGRect(x: labelW, y: y + 3, width: size.width - labelW - 16, height: max(2, rowH - 6))
                 ctx.fill(Path(roundedRect: track, cornerRadius: 3), with: .color(.white.opacity(0.04)))
